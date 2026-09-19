@@ -12,7 +12,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.List;
-import java.util.ArrayList;
+
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
@@ -60,9 +60,6 @@ public class Note {
             {"Dev_Web",    ""}
         };
 
-    static String[][] moyenne = {
-
-    };
     static String[] nomsMatieres = new String[matière.length];
 
     // =====================================================================
@@ -331,7 +328,18 @@ public class Note {
                     }
                     model.addColumn("Note" + columnNote[0]++, nouvelleColonne);
                 }
-                calculMoyenneGenerale();
+
+                // ---- Mise à jour du tableau des moyennes (colonnes fixes, jamais de nouvelle colonne) ----
+                List<Double> moyennes = calculMoyenneGenerale();
+
+                DefaultTableModel modelMoyenne = (DefaultTableModel) tableMoyenne.getModel();
+                modelMoyenne.setRowCount(0); // on reconstruit entièrement le tableau à chaque fois
+                for (int i = 0; i < moyennes.size(); i++) {
+                    Double m = moyennes.get(i);
+                    String affichage = (m == null) ? "" : String.format("%.2f", m);
+                    modelMoyenne.addRow(new Object[]{ nomsMatieres[i], affichage });
+                }
+
                 addNoteFrame.dispose();
             }
         });
@@ -354,42 +362,48 @@ public class Note {
         addNoteFrame.setVisible(true);
     }
 
-    static void calculMoyenneGenerale() {
-    DefaultTableModel model = (DefaultTableModel) tableNote.getModel();
-    List<Double> moyennesParMatiere = new ArrayList<>();
+    // Calcule la moyenne de chaque matière (colonnes "Note X" de tableNote)
+    // et renvoie la liste (une valeur par matière, dans l'ordre des lignes).
+    // Une matière sans note reçoit `null` dans la liste.
+    static List<Double> calculMoyenneGenerale() {
+        DefaultTableModel model = (DefaultTableModel) tableNote.getModel();
+        List<Double> moyennesParMatiere = new ArrayList<>();
 
-    // Parcourt chaque matière (chaque ligne du tableau)
-    for (int row = 0; row < model.getRowCount(); row++) {
-        double sommeNotes = 0;
-        double sommeQuotients = 0;
+        // Parcourt chaque matière (chaque ligne du tableau)
+        for (int row = 0; row < model.getRowCount(); row++) {
+            double sommeNotes = 0;
+            double sommeQuotients = 0;
 
-        // Parcourt toutes les colonnes "Note X" de cette matière (à partir de la colonne 1)
-        for (int col = 1; col < model.getColumnCount(); col++) {
-            Object valeur = model.getValueAt(row, col);
-            String texte = (valeur == null) ? "" : valeur.toString();
+            // Parcourt toutes les colonnes "Note X" de cette matière (à partir de la colonne 1)
+            for (int col = 1; col < model.getColumnCount(); col++) {
+                Object valeur = model.getValueAt(row, col);
+                String texte = (valeur == null) ? "" : valeur.toString();
 
-            if (texte.matches("\\d+/\\d+")) {
-                String[] parts = texte.split("/");
-                sommeNotes += Double.parseDouble(parts[0]);
-                sommeQuotients += Double.parseDouble(parts[1]);
+                if (texte.matches("\\d+/\\d+")) {
+                    String[] parts = texte.split("/");
+                    sommeNotes += Double.parseDouble(parts[0]);
+                    sommeQuotients += Double.parseDouble(parts[1]);
+                }
+            }
+
+            // Si la matière a au moins une note, on calcule sa moyenne pondérée
+            if (sommeQuotients > 0) {
+                moyennesParMatiere.add((sommeNotes / sommeQuotients) * 20); // ramenée sur 20
+            } else {
+                moyennesParMatiere.add(null); // pas encore de note pour cette matière
             }
         }
 
-        // Si la matière a au moins une note, on calcule sa moyenne pondérée
-        if (sommeQuotients > 0) {
-            moyennesParMatiere.add((sommeNotes / sommeQuotients) * 20); // ramenée sur 20
-        }
+        // Moyenne générale = moyenne des moyennes de chaque matière (on ignore les matières sans note)
+        double moyenneGenerale = moyennesParMatiere.stream()
+                .filter(v -> v != null)
+                .mapToDouble(Double::doubleValue)
+                .average()
+                .orElse(0);
+
+        System.out.format("Moyenne générale : %.2f/20%n", moyenneGenerale);
+        return moyennesParMatiere;
     }
-
-    // Moyenne générale = moyenne des moyennes de chaque matière
-    double moyenneGenerale = moyennesParMatiere.stream()
-            .mapToDouble(Double::doubleValue)
-            .average()
-            .orElse(0);
-
-    System.out.format("Moyenne générale : %.2f/20%n", moyenneGenerale);
-}
-
 
     // Applique le style "thème" à un JTextField (fond, texte, bordure, curseur)
     static void styleTextField(JTextField field) {
@@ -432,9 +446,9 @@ public class Note {
         titleLabel.setFont(Theme.FONT_TITLE);
         titleLabel.setForeground(Theme.TEXT_PRIMARY);
         titleLabel.setBorder(new EmptyBorder(16, 0, 16, 0));
-        
 
-        // Modèle du tableau : seule la case (ligne 0, colonne 1) est éditable directement
+        // Modèle du tableau des notes : seule la case (ligne 0, colonne 1) est éditable directement.
+        // C'est CE modèle qui gagne des colonnes "Note X" à chaque nouvelle note.
         DefaultTableModel tableUnClickable = new DefaultTableModel(matière, colonnes) {
             @Override
             public boolean isCellEditable(int row, int column) {
@@ -451,8 +465,21 @@ public class Note {
         scroll.getViewport().setBackground(Theme.SURFACE);
         scroll.setBorder(new EmptyBorder(0, 20, 0, 20));
 
-        // Table moyenne 
-        tableMoyenne = new JTable(tableUnClickable);
+        // Modèle SÉPARÉ pour le tableau des moyennes : 2 colonnes FIXES ("Matière", "Moyenne").
+        // Il n'est jamais touché par model.addColumn(...) — seul tableNote grandit.
+        DefaultTableModel modelMoyenne = new DefaultTableModel(new String[]{"Matière", "Moyenne"}, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return false; // lecture seule : c'est un affichage calculé
+            }
+        };
+        // Pré-remplit une ligne par matière, moyenne vide au départ
+        ListMatiere();
+        for (String nom : nomsMatieres) {
+            modelMoyenne.addRow(new Object[]{ nom, "" });
+        }
+
+        tableMoyenne = new JTable(modelMoyenne);
         styleTable(tableMoyenne);
 
         JScrollPane scrollMoyenne = new JScrollPane(tableMoyenne);
@@ -491,7 +518,7 @@ public class Note {
         frame.setVisible(true);
     }
 
-    // Applique le style "thème" au tableau des notes : couleurs, police,
+    // Applique le style "thème" au tableau : couleurs, police,
     // hauteur de ligne, style de l'en-tête et de la sélection.
     static void styleTable(JTable table) {
         table.setFont(Theme.FONT_TABLE);
