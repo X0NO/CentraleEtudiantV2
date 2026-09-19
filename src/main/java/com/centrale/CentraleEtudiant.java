@@ -1,3 +1,5 @@
+package com.centrale;
+
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.BorderLayout;
@@ -13,8 +15,6 @@ import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
 import javax.swing.text.PlainDocument;
 import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
 
 public class CentraleEtudiant {
 
@@ -35,8 +35,28 @@ public class CentraleEtudiant {
         };
 
     static String[] nomsMatieres = new String[matière.length];
-
+    
     static class NoteFilter extends DocumentFilter {
+
+        static void ConnectNas(){
+            //Connexion nas 
+
+        String url = "jdbc:mariadb://192.168.1.142:3307/CentraleEtudiant"; 
+        
+        String user = "appli_java";
+        String password = "MEyu+,AxZlW4P[WM";
+
+        System.out.println("Tentative de connexion au NAS...");
+
+        try (Connection conn = DriverManager.getConnection(url, user, password)) {
+            if (conn != null && !conn.isClosed()) {
+                System.out.println("Connexion réussie à MariaDB sur le NAS !");
+            }
+        } catch (SQLException e) {
+            System.err.println("Échec de la connexion. Vérifie l'IP, le port, le pare-feu et les identifiants.");
+            e.printStackTrace();
+        }
+        } 
  
         @Override
         public void insertString(FilterBypass fb, int offset, String string, AttributeSet attr) throws BadLocationException {
@@ -108,7 +128,7 @@ public class CentraleEtudiant {
                 }
             }
 
-                IO.println(saisie);
+                System.out.println(saisie);
 
                 ListMatiere();
 
@@ -217,7 +237,7 @@ public class CentraleEtudiant {
         }
 
         String matiereChoisie = (String) comboMatiere.getSelectedItem();
-        IO.println(matiereChoisie + " : " + note + "/" + quotient);
+        System.out.println(matiereChoisie + " : " + note + "/" + quotient);
 
         DefaultTableModel model = (DefaultTableModel) tableNote.getModel();
 
@@ -292,23 +312,7 @@ public class CentraleEtudiant {
 
     public static void main(String[] args) {
 
-        //Connexion nas 
-
-        String url = "jdbc:mariadb://192.168.1.142:3307/CentraleEtudiant"; 
-        
-        String user = "appli_java";
-        String password = "MEyu+,AxZlW4P[WM";
-
-        System.out.println("Tentative de connexion au NAS...");
-
-        try (Connection conn = DriverManager.getConnection(url, user, password)) {
-            if (conn != null && !conn.isClosed()) {
-                System.out.println("Connexion réussie à MariaDB sur le NAS !");
-            }
-        } catch (SQLException e) {
-            System.err.println("Échec de la connexion. Vérifie l'IP, le port, le pare-feu et les identifiants.");
-            e.printStackTrace();
-        }
+        //ConnectNas();
 
         //Creation de la fenêtre principale
         JFrame frame = new JFrame("Centrale Etudiant"); 
