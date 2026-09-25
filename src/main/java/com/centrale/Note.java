@@ -1,39 +1,83 @@
 package com.centrale;
 
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Cursor;
+import java.awt.Font;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.GridLayout;
+import java.awt.Insets;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
-import javax.swing.*;
+import java.util.List;
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JComboBox;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTable;
+import javax.swing.JTextField;
+import javax.swing.SwingConstants;
+import javax.swing.UIManager;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.JTableHeader;
-import java.awt.*;
-import java.awt.event.*;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.util.List;
-
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
 import javax.swing.text.PlainDocument;
+import io.github.cdimascio.dotenv.Dotenv;
 
 public class Note {
 
     // =====================================================================
-    // THEME : toutes les couleurs / polices de l'appli sont définies ICI.
-    // Pour changer le look de tout le logiciel, il suffit de modifier ces
-    // constantes — aucun autre endroit du code n'a de couleur "en dur".
+    // CONNEXION BASE DE DONNÉES
+    // =====================================================================
+   public static  Dotenv dotenv = Dotenv.load();
+
+    private static final String urlDB = dotenv.get("DB_URL");
+    private static final String USER = dotenv.get("DB_USERNAME");
+    private static final String PASSWORD =dotenv.get("DB_PASSWORD");
+
+    private static final String FILE_OFFLINE_CACHE = "offline_notes.dat";
+
+    private static final String[] MATIERES_PAR_DEFAUT = {
+            "Intro_Syst", "Init_Dev", "Maths", "Intro_BD", "Anglais", "Commu", "PPP", "Dev_Web"
+    };
+
+    // =====================================================================
+    // THEME
     // =====================================================================
     static final class Theme {
-        static final Color BACKGROUND      = new Color(0x1E1E2E); // fond général (gris-bleu foncé)
-        static final Color SURFACE         = new Color(0x2A2A3C); // fond des panels / tableau
-        static final Color SURFACE_ALT     = new Color(0x252536); // lignes alternées du tableau
-        static final Color ACCENT          = new Color(0x89B4FA); // couleur d'accent (boutons, sélection)
-        static final Color ACCENT_HOVER    = new Color(0x74A0F0); // accent au survol
-        static final Color TEXT_PRIMARY    = new Color(0xE0E0E8); // texte principal (clair)
-        static final Color TEXT_ON_ACCENT  = new Color(0x1E1E2E); // texte sur fond accent (foncé)
-        static final Color BORDER          = new Color(0x3A3A4E); // bordures / grille du tableau
+        static final Color BACKGROUND      = new Color(0x1E1E2E);
+        static final Color SURFACE         = new Color(0x2A2A3C);
+        static final Color SURFACE_ALT     = new Color(0x252536);
+        static final Color ACCENT          = new Color(0x89B4FA);
+        static final Color ACCENT_HOVER    = new Color(0x74A0F0);
+        static final Color TEXT_PRIMARY    = new Color(0xE0E0E8);
+        static final Color TEXT_ON_ACCENT  = new Color(0x1E1E2E);
+        static final Color BORDER          = new Color(0x3A3A4E);
 
         static final Font FONT_TITLE  = new Font("Segoe UI", Font.BOLD, 20);
         static final Font FONT_LABEL  = new Font("Segoe UI", Font.PLAIN, 14);
@@ -45,27 +89,272 @@ public class Note {
     static int[] columnNote = {2};
     static JTable tableNote;
     static JTable tableMoyenne;
-
-    static String[] colonnes = {"Matière", "Note 1"};
-    static double[] notes = {};
-
-    static String[][] matière = {
-            {"Intro_Syst", ""},
-            {"Init_Dev",   ""},
-            {"Maths",      ""},
-            {"Intro_BD",   ""},
-            {"Anglais",    ""},
-            {"Commu",      ""},
-            {"PPP",        ""},
-            {"Dev_Web",    ""}
-        };
-
-    static String[] nomsMatieres = new String[matière.length];
+    static String[] nomsMatieres = new String[0];
 
     // =====================================================================
-    // OUTIL : crée un bouton déjà habillé avec le thème (couleur, police,
-    // curseur main, effet de survol). Utilisé partout pour éviter de
-    // répéter le style à chaque création de bouton.
+    // STOCKAGE HORS-LIGNE SÉCURISÉ (CHIFFREMENT AES)
+    // =====================================================================
+    static final class SecureOfflineStorage {
+        private static final String SECRET_KEY = "CentraleStudentSecretKeyForCache";
+
+        private static SecretKeySpec getKey() throws Exception {
+            byte[] key = SECRET_KEY.getBytes(StandardCharsets.UTF_8);
+            MessageDigest sha = MessageDigest.getInstance("SHA-256");
+            key = sha.digest(key);
+            key = Arrays.copyOf(key, 16); // 128 bit key
+            return new SecretKeySpec(key, "AES");
+        }
+
+        public static synchronized void sauvegarderNoteHorsLigne(String nomMatiere, int valeur, int quotient) {
+            try {
+                List<String> lignes = lireNotesHorsLigne();
+                lignes.add(nomMatiere + ";" + valeur + ";" + quotient);
+
+                StringBuilder sb = new StringBuilder();
+                for (String line : lignes) {
+                    sb.append(line).append("\n");
+                }
+
+                Cipher cipher = Cipher.getInstance("AES");
+                cipher.init(Cipher.ENCRYPT_MODE, getKey());
+                byte[] encryptedBytes = cipher.doFinal(sb.toString().getBytes(StandardCharsets.UTF_8));
+
+                try (FileOutputStream fos = new FileOutputStream(FILE_OFFLINE_CACHE)) {
+                    fos.write(encryptedBytes);
+                }
+            } catch (Exception e) {
+                System.err.println("Erreur lors de la sauvegarde sécurisée hors-ligne : " + e.getMessage());
+            }
+        }
+
+        public static synchronized List<String> lireNotesHorsLigne() {
+            List<String> resultats = new ArrayList<>();
+            File file = new File(FILE_OFFLINE_CACHE);
+            if (!file.exists()) return resultats;
+
+            try (FileInputStream fis = new FileInputStream(file)) {
+                byte[] data = fis.readAllBytes();
+                if (data.length == 0) return resultats;
+
+                Cipher cipher = Cipher.getInstance("AES");
+                cipher.init(Cipher.DECRYPT_MODE, getKey());
+                byte[] decryptedBytes = cipher.doFinal(data);
+
+                String content = new String(decryptedBytes, StandardCharsets.UTF_8);
+                String[] lines = content.split("\n");
+                for (String line : lines) {
+                    if (!line.trim().isEmpty()) {
+                        resultats.add(line.trim());
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("Erreur de lecture du cache hors-ligne : " + e.getMessage());
+            }
+            return resultats;
+        }
+
+        public static synchronized void viderCache() {
+            File file = new File(FILE_OFFLINE_CACHE);
+            if (file.exists()) {
+                file.delete();
+            }
+        }
+
+        public static void synchroniserNotesHorsLigne() {
+            List<String> notesEnAttente = lireNotesHorsLigne();
+            if (notesEnAttente.isEmpty()) return;
+
+            System.out.println("Synchronisation des notes saisies hors-ligne...");
+            List<String> nonSynchro = new ArrayList<>();
+
+            for (String ligne : notesEnAttente) {
+                String[] parts = ligne.split(";");
+                if (parts.length == 3) {
+                    String matiere = parts[0];
+                    int valeur = Integer.parseInt(parts[1]);
+                    int quotient = Integer.parseInt(parts[2]);
+
+                    Integer idMatiere = MatiereDAO.trouverIdParNom(matiere);
+                    if (idMatiere != null) {
+                        boolean ok = NoteDAO.inserer(idMatiere, valeur, quotient);
+                        if (!ok) nonSynchro.add(ligne);
+                    }
+                }
+            }
+
+            viderCache();
+            // Si certaines n'ont pas pu s'insérer, re-sauvegarder
+            for (String line : nonSynchro) {
+                String[] p = line.split(";");
+                sauvegarderNoteHorsLigne(p[0], Integer.parseInt(p[1]), Integer.parseInt(p[2]));
+            }
+        }
+    }
+
+    // =====================================================================
+    // ACCÈS BASE DE DONNÉES
+    // =====================================================================
+    static final class Database {
+
+        static Connection getConnection() throws SQLException {
+            return DriverManager.getConnection(urlDB, USER, PASSWORD);
+        }
+
+        static boolean connecter() {
+            try (Connection conn = getConnection()) {
+                System.out.println("Connexion à la base de données réussie !");
+                // Tente la synchro des notes stockées en local lors des échecs précédents
+                SecureOfflineStorage.synchroniserNotesHorsLigne();
+                return true;
+            } catch (SQLException e) {
+                System.err.println("Impossible de se connecter au Raspberry Pi : " + e.getMessage());
+                return false;
+            }
+        }
+
+        static void creerTables() {
+            String sqlMatieres = "CREATE TABLE IF NOT EXISTS matieres (" +
+                    "id SERIAL PRIMARY KEY," +
+                    "nom VARCHAR(100) NOT NULL UNIQUE," +
+                    "coefficient NUMERIC(4,2) NOT NULL DEFAULT 1" +
+                    ")";
+
+            String sqlNotes = "CREATE TABLE IF NOT EXISTS notes (" +
+                    "id SERIAL PRIMARY KEY," +
+                    "matiere_id INTEGER NOT NULL REFERENCES matieres(id) ON DELETE CASCADE," +
+                    "valeur INTEGER NOT NULL," +
+                    "quotient INTEGER NOT NULL," +
+                    "date_creation TIMESTAMP DEFAULT NOW()" +
+                    ")";
+
+            try (Connection conn = getConnection();
+                 Statement stmt = conn.createStatement()) {
+                stmt.execute(sqlMatieres);
+                stmt.execute(sqlNotes);
+                System.out.println("Tables 'matieres' et 'notes' prêtes.");
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+
+        static void seedMatieresSiVide() {
+            if (!MatiereDAO.listerNoms().isEmpty()) return;
+            for (String nom : MATIERES_PAR_DEFAUT) {
+                MatiereDAO.inserer(nom, 1.0);
+            }
+        }
+    }
+
+    // =====================================================================
+    // DAO MATIÈRES
+    // =====================================================================
+    static final class MatiereDAO {
+
+        static Integer trouverIdParNom(String nom) {
+            String sql = "SELECT id FROM matieres WHERE nom = ?";
+            try (Connection conn = Database.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+                stmt.setString(1, nom);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    if (rs.next()) return rs.getInt("id");
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
+
+        static int inserer(String nom, double coefficient) {
+            String sql = "INSERT INTO matieres (nom, coefficient) VALUES (?, ?) RETURNING id";
+            try (Connection conn = Database.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+                stmt.setString(1, nom);
+                stmt.setDouble(2, coefficient);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    if (rs.next()) return rs.getInt("id");
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+            return -1;
+        }
+
+        static List<String> listerNoms() {
+            List<String> noms = new ArrayList<>();
+            String sql = "SELECT nom FROM matieres ORDER BY id";
+            try (Connection conn = Database.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql);
+                 ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) noms.add(rs.getString("nom"));
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+            return noms;
+        }
+    }
+
+    // =====================================================================
+    // DAO NOTES (AVEC SUPPRESSION ET INSERTION)
+    // =====================================================================
+    static final class NoteDAO {
+
+        static boolean inserer(int matiereId, int valeur, int quotient) {
+            String sql = "INSERT INTO notes (matiere_id, valeur, quotient) VALUES (?, ?, ?)";
+            try (Connection conn = Database.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+                stmt.setInt(1, matiereId);
+                stmt.setInt(2, valeur);
+                stmt.setInt(3, quotient);
+                stmt.executeUpdate();
+                return true;
+            } catch (SQLException e) {
+                e.printStackTrace();
+                return false;
+            }
+        }
+
+        /**
+         * Supprime une note spécifique de la base de données.
+         */
+        static boolean supprimer(int matiereId, int valeur, int quotient) {
+            // Supprime la note la plus récente correspondant aux critères
+            String sql = "DELETE FROM notes WHERE id IN (" +
+                         "  SELECT id FROM notes WHERE matiere_id = ? AND valeur = ? AND quotient = ? " +
+                         "  ORDER BY id DESC LIMIT 1" +
+                         ")";
+            try (Connection conn = Database.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+                stmt.setInt(1, matiereId);
+                stmt.setInt(2, valeur);
+                stmt.setInt(3, quotient);
+                int rowsAffected = stmt.executeUpdate();
+                return rowsAffected > 0;
+            } catch (SQLException e) {
+                e.printStackTrace();
+                return false;
+            }
+        }
+
+        static List<String> listerPourMatiere(int matiereId) {
+            List<String> resultats = new ArrayList<>();
+            String sql = "SELECT valeur, quotient FROM notes WHERE matiere_id = ? ORDER BY id";
+            try (Connection conn = Database.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql)) {
+                stmt.setInt(1, matiereId);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        resultats.add(rs.getInt("valeur") + "/" + rs.getInt("quotient"));
+                    }
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+            return resultats;
+        }
+    }
+
+    // =====================================================================
+    // UTILITAIRES & THEME
     // =====================================================================
     static JButton themedButton(String text) {
         JButton button = new JButton(text);
@@ -73,10 +362,9 @@ public class Note {
         button.setBackground(Theme.ACCENT);
         button.setForeground(Theme.TEXT_ON_ACCENT);
         button.setFocusPainted(false);
-        button.setBorder(new EmptyBorder(8, 18, 8, 18)); // padding interne
+        button.setBorder(new EmptyBorder(8, 18, 8, 18));
         button.setCursor(new Cursor(Cursor.HAND_CURSOR));
 
-        // Petit effet visuel au survol de la souris
         button.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseEntered(MouseEvent e) {
@@ -90,27 +378,7 @@ public class Note {
         return button;
     }
 
-    // Filtre de saisie : n'autorise que des chiffres et un seul "/" dans le champ Note
     static class NoteFilter extends DocumentFilter {
-
-        static void ConnectNas() {
-            // Connexion au NAS (base de données des notes)
-            String url = "jdbc:mariadb://192.168.1.142:3307/CentraleEtudiant";
-            String user = "appli_java";
-            String password = "MEyu+,AxZlW4[WM";
-
-            System.out.println("Tentative de connexion au NAS...");
-
-            try (Connection conn = DriverManager.getConnection(url, user, password)) {
-                if (conn != null && !conn.isClosed()) {
-                    System.out.println("Connexion réussie à MariaDB sur le NAS !");
-                }
-            } catch (SQLException e) {
-                System.err.println("Échec de la connexion. Vérifie l'IP, le port, le pare-feu et les identifiants.");
-                e.printStackTrace();
-            }
-        }
-
         @Override
         public void insertString(FilterBypass fb, int offset, String string, AttributeSet attr) throws BadLocationException {
             replace(fb, offset, 0, string, attr);
@@ -121,23 +389,138 @@ public class Note {
             String currentText = fb.getDocument().getText(0, fb.getDocument().getLength());
             String proposedText = currentText.substring(0, offset) + text + currentText.substring(offset + length);
 
-            // N'accepte que : chiffres, et au maximum un seul '/'
             if (proposedText.matches("\\d*(/\\d*)?")) {
                 super.replace(fb, offset, length, text, attrs);
             }
-            // Sinon, la saisie est simplement ignorée (rien ne s'affiche)
         }
     }
 
-    // Recopie les noms de matières (colonne 0 du tableau `matière`) dans `nomsMatieres`
     static void ListMatiere() {
-        for (int i = 0; i < matière.length; i++) {
-            nomsMatieres[i] = matière[i][0];
+        DefaultTableModel model = (DefaultTableModel) tableNote.getModel();
+        nomsMatieres = new String[model.getRowCount()];
+        for (int i = 0; i < model.getRowCount(); i++) {
+            nomsMatieres[i] = (String) model.getValueAt(i, 0);
         }
+    }
+
+    /**
+     * Recharge complètement l'affichage de l'application à partir de la BD.
+     */
+    static void rechargerApplication() {
+        chargerDonneesInitiales();
+
+        DefaultTableModel modelNote = new DefaultTableModel(donneesInitiales, colonnesInitiales) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return false;
+            }
+        };
+        tableNote.setModel(modelNote);
+
+        ListMatiere();
+        List<Double> moyennes = calculMoyenneGenerale();
+
+        DefaultTableModel modelMoyenne = new DefaultTableModel(new String[]{"Matière", "Moyenne"}, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return false;
+            }
+        };
+
+        for (int i = 0; i < nomsMatieres.length; i++) {
+            Double m = (i < moyennes.size()) ? moyennes.get(i) : null;
+            String affichage = (m == null) ? "" : String.format("%.2f", m);
+            modelMoyenne.addRow(new Object[]{ nomsMatieres[i], affichage });
+        }
+        tableMoyenne.setModel(modelMoyenne);
     }
 
     // =====================================================================
-    // Fenêtre "Nouvelle Matière"
+    // FENÊTRE : SUPPRIMER UNE NOTE
+    // =====================================================================
+    static void DeleteNote() {
+        JFrame deleteFrame = new JFrame("Supprimer Une Note");
+        deleteFrame.setSize(500, 250);
+        deleteFrame.setLocationRelativeTo(null);
+        deleteFrame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+        deleteFrame.getContentPane().setBackground(Theme.BACKGROUND);
+
+        ListMatiere();
+        JComboBox<String> comboMatiere = new JComboBox<>(nomsMatieres);
+        JTextField noteField = new JTextField(10);
+        styleTextField(noteField);
+        ((PlainDocument) noteField.getDocument()).setDocumentFilter(new NoteFilter());
+
+        JLabel labelMatiere = new JLabel("Matière :");
+        JLabel labelNote = new JLabel("Note à supprimer (ex 15/20) :");
+        styleLabel(labelMatiere);
+        styleLabel(labelNote);
+
+        JPanel centerPanel = new JPanel(new GridBagLayout());
+        centerPanel.setBackground(Theme.BACKGROUND);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 8, 8, 8);
+        gbc.anchor = GridBagConstraints.WEST;
+
+        gbc.gridx = 0; gbc.gridy = 0;
+        centerPanel.add(labelMatiere, gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL;
+        centerPanel.add(comboMatiere, gbc);
+
+        gbc.gridx = 0; gbc.gridy = 1; gbc.fill = GridBagConstraints.NONE;
+        centerPanel.add(labelNote, gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL;
+        centerPanel.add(noteField, gbc);
+
+        JButton btnSupprimer = themedButton("Supprimer");
+        btnSupprimer.addActionListener(e -> {
+            String saisie = noteField.getText().trim();
+            if (!saisie.matches("\\d+/\\d+")) {
+                JOptionPane.showMessageDialog(deleteFrame, "Format attendu : note/quotient (ex: 15/20)", "Erreur", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            String[] parts = saisie.split("/");
+            int val = Integer.parseInt(parts[0]);
+            int quot = Integer.parseInt(parts[1]);
+            String matiereChoisie = (String) comboMatiere.getSelectedItem();
+
+            Integer matiereId = MatiereDAO.trouverIdParNom(matiereChoisie);
+            if (matiereId == null) {
+                JOptionPane.showMessageDialog(deleteFrame, "Matière introuvable.", "Erreur", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            boolean succes = NoteDAO.supprimer(matiereId, val, quot);
+            if (succes) {
+                JOptionPane.showMessageDialog(deleteFrame, "Note supprimée avec succès !");
+                rechargerApplication();
+                deleteFrame.dispose();
+            } else {
+                JOptionPane.showMessageDialog(deleteFrame, "Impossible de trouver cette note en BDD.", "Erreur", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+
+        JButton btnAnnuler = themedButton("Annuler");
+        btnAnnuler.addActionListener(e -> deleteFrame.dispose());
+
+        JPanel btnPanel = new JPanel();
+        btnPanel.setBackground(Theme.BACKGROUND);
+        btnPanel.add(btnSupprimer);
+        btnPanel.add(btnAnnuler);
+
+        JPanel mainPanel = new JPanel(new BorderLayout());
+        mainPanel.setBackground(Theme.BACKGROUND);
+        mainPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
+        mainPanel.add(centerPanel, BorderLayout.CENTER);
+        mainPanel.add(btnPanel, BorderLayout.SOUTH);
+
+        deleteFrame.getContentPane().add(mainPanel);
+        deleteFrame.setVisible(true);
+    }
+
+    // =====================================================================
+    // FENÊTRES AJOUT (MATIERE & NOTE)
     // =====================================================================
     static void AddMatiere() {
         JFrame addMatiereFrame = new JFrame("Nouvelle Matière");
@@ -152,48 +535,33 @@ public class Note {
         JLabel labelMatiere = new JLabel("Nom de la matière :");
         styleLabel(labelMatiere);
 
-        // Panel avec GridBagLayout : une grille propre label/champ, ligne par ligne
         JPanel centerPanel = new JPanel(new GridBagLayout());
         centerPanel.setBackground(Theme.BACKGROUND);
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(8, 8, 8, 8); // espacement autour de chaque composant
+        gbc.insets = new Insets(8, 8, 8, 8);
         gbc.anchor = GridBagConstraints.WEST;
 
-        gbc.gridx = 0;
-        gbc.gridy = 0;
+        gbc.gridx = 0; gbc.gridy = 0;
         centerPanel.add(labelMatiere, gbc);
-
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL; // le champ s'étire proprement dans sa colonne
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL;
         centerPanel.add(matiereField, gbc);
 
-        DefaultTableModel model = (DefaultTableModel) tableNote.getModel();
-
         JButton validButton = themedButton("Valider");
-        validButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                String saisie = matiereField.getText();
-
-                for (int i = 0; i < model.getRowCount(); i++) {
-                    if (model.getValueAt(i, 0).equals(saisie)) {
-                        JOptionPane.showMessageDialog(addMatiereFrame,
-                            "Cette matière existe déjà.",
-                            "Erreur", JOptionPane.ERROR_MESSAGE);
-                        return;
-                    }
-                }
-
-                System.out.println(saisie);
-                ListMatiere();
-
-                if (!Arrays.asList(nomsMatieres).contains(saisie)) {
-                    // saisie n'est pas dans le tableau → on peut l'ajouter
-                    model.addRow(new Object[model.getColumnCount()]); // ajoute une ligne vide
-                    model.setValueAt(saisie, model.getRowCount() - 1, 0); // met le nom de la matière dans la première colonne
-                }
-                addMatiereFrame.dispose();
+        validButton.addActionListener(e -> {
+            String saisie = matiereField.getText().trim();
+            if (saisie.isEmpty()) {
+                JOptionPane.showMessageDialog(addMatiereFrame, "Le nom ne peut pas être vide.", "Erreur", JOptionPane.ERROR_MESSAGE);
+                return;
             }
+
+            int nouvelId = MatiereDAO.inserer(saisie, 1.0);
+            if (nouvelId == -1) {
+                JOptionPane.showMessageDialog(addMatiereFrame, "Erreur lors de l'enregistrement ou matière existante.", "Erreur", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            rechargerApplication();
+            addMatiereFrame.dispose();
         });
 
         JButton annulButton = themedButton("Annuler");
@@ -204,7 +572,6 @@ public class Note {
         btnValidAnnulPanel.add(validButton);
         btnValidAnnulPanel.add(annulButton);
 
-        // Panel principal de la fenêtre : le champ au centre, les boutons en bas
         JPanel newMatierePanel = new JPanel(new BorderLayout());
         newMatierePanel.setBackground(Theme.BACKGROUND);
         newMatierePanel.setBorder(new EmptyBorder(20, 20, 20, 20));
@@ -215,9 +582,6 @@ public class Note {
         addMatiereFrame.setVisible(true);
     }
 
-    // =====================================================================
-    // Fenêtre "Nouvelle Note"
-    // =====================================================================
     static void AddNote() {
         JFrame addNoteFrame = new JFrame("Nouvelle Note");
         addNoteFrame.setSize(600, 300);
@@ -226,122 +590,70 @@ public class Note {
         addNoteFrame.getContentPane().setBackground(Theme.BACKGROUND);
 
         ListMatiere();
-
         JComboBox<String> comboMatiere = new JComboBox<>(nomsMatieres);
         comboMatiere.setFont(Theme.FONT_LABEL);
 
         JTextField noteField = new JTextField(10);
         styleTextField(noteField);
+        ((PlainDocument) noteField.getDocument()).setDocumentFilter(new NoteFilter());
 
         JLabel labelMatiere = new JLabel("Matière :");
         JLabel labelNote = new JLabel("Note :");
         styleLabel(labelMatiere);
         styleLabel(labelNote);
 
-        ((PlainDocument) noteField.getDocument()).setDocumentFilter(new NoteFilter());
-
-        // Panel avec GridBagLayout : une grille propre label/champ, ligne par ligne
         JPanel centerPanel = new JPanel(new GridBagLayout());
         centerPanel.setBackground(Theme.BACKGROUND);
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(8, 8, 8, 8);
         gbc.anchor = GridBagConstraints.WEST;
 
-        // Ligne 0 : label + combo Matière
-        gbc.gridx = 0;
-        gbc.gridy = 0;
+        gbc.gridx = 0; gbc.gridy = 0;
         centerPanel.add(labelMatiere, gbc);
-
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL;
         centerPanel.add(comboMatiere, gbc);
 
-        // Ligne 1 : label + champ Note
-        gbc.gridx = 0;
-        gbc.gridy = 1;
-        gbc.fill = GridBagConstraints.NONE;
+        gbc.gridx = 0; gbc.gridy = 1; gbc.fill = GridBagConstraints.NONE;
         centerPanel.add(labelNote, gbc);
-
-        gbc.gridx = 1;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL;
         centerPanel.add(noteField, gbc);
 
         JButton validButton = themedButton("Valider");
-
-        validButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                String saisie = noteField.getText();
-
-                if (!saisie.matches("\\d+/\\d+")) {
-                    JOptionPane.showMessageDialog(addNoteFrame,
-                        "Le format attendu est : note/quotient (ex : 15/20)",
-                        "Format invalide", JOptionPane.ERROR_MESSAGE);
-                    return;
-                }
-
-                String[] parts = saisie.split("/");
-                int note = Integer.parseInt(parts[0]);
-                int quotient = Integer.parseInt(parts[1]);
-
-                if (note > quotient) {
-                    JOptionPane.showMessageDialog(addNoteFrame,
-                        "La note ne peut pas être supérieure au quotient (ex : 15/20, pas 25/20)",
-                        "Note invalide", JOptionPane.ERROR_MESSAGE);
-                    return;
-                }
-
-                String matiereChoisie = (String) comboMatiere.getSelectedItem();
-                System.out.println(matiereChoisie + " : " + note + "/" + quotient);
-
-                DefaultTableModel model = (DefaultTableModel) tableNote.getModel();
-
-                // Cherche la ligne correspondant à la matière choisie
-                int rowIndex = -1;
-                for (int i = 0; i < model.getRowCount(); i++) {
-                    if (model.getValueAt(i, 0).equals(matiereChoisie)) {
-                        rowIndex = i;
-                        break;
-                    }
-                }
-
-                // Cherche la première colonne "Note X" vide sur cette ligne
-                int colIndex = -1;
-                for (int col = 1; col < model.getColumnCount(); col++) {
-                    if (model.getValueAt(rowIndex, col).equals("")) {
-                        colIndex = col;
-                        break;
-                    }
-                }
-
-                String resultat = note + "/" + quotient;
-
-                if (colIndex != -1) {
-                    // Une case vide existait : on l'utilise
-                    model.setValueAt(resultat, rowIndex, colIndex);
-                } else {
-                    // Plus de case vide : on ajoute une nouvelle colonne "Note X"
-                    // remplie de "" sauf pour notre ligne, où on met directement le résultat
-                    String[] nouvelleColonne = new String[model.getRowCount()];
-                    for (int i = 0; i < nouvelleColonne.length; i++) {
-                        nouvelleColonne[i] = (i == rowIndex) ? resultat : "";
-                    }
-                    model.addColumn("Note" + columnNote[0]++, nouvelleColonne);
-                }
-
-                // ---- Mise à jour du tableau des moyennes (colonnes fixes, jamais de nouvelle colonne) ----
-                List<Double> moyennes = calculMoyenneGenerale();
-
-                DefaultTableModel modelMoyenne = (DefaultTableModel) tableMoyenne.getModel();
-                modelMoyenne.setRowCount(0); // on reconstruit entièrement le tableau à chaque fois
-                for (int i = 0; i < moyennes.size(); i++) {
-                    Double m = moyennes.get(i);
-                    String affichage = (m == null) ? "" : String.format("%.2f", m);
-                    modelMoyenne.addRow(new Object[]{ nomsMatieres[i], affichage });
-                }
-
-                addNoteFrame.dispose();
+        validButton.addActionListener(e -> {
+            String saisie = noteField.getText();
+            if (!saisie.matches("\\d+/\\d+")) {
+                JOptionPane.showMessageDialog(addNoteFrame, "Format attendu : note/quotient (ex : 15/20)", "Format invalide", JOptionPane.ERROR_MESSAGE);
+                return;
             }
+
+            String[] parts = saisie.split("/");
+            int note = Integer.parseInt(parts[0]);
+            int quotient = Integer.parseInt(parts[1]);
+
+            if (note > quotient) {
+                JOptionPane.showMessageDialog(addNoteFrame, "La note ne peut pas être supérieure au quotient", "Note invalide", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            String matiereChoisie = (String) comboMatiere.getSelectedItem();
+            Integer matiereId = MatiereDAO.trouverIdParNom(matiereChoisie);
+
+            // tentative d'insertion BDD
+            boolean insertionOk = false;
+            if (matiereId != null) {
+                insertionOk = NoteDAO.inserer(matiereId, note, quotient);
+            }
+
+            if (!insertionOk) {
+                // Échec de la connexion au Raspberry Pi : stockage local chiffré
+                SecureOfflineStorage.sauvegarderNoteHorsLigne(matiereChoisie, note, quotient);
+                JOptionPane.showMessageDialog(addNoteFrame, "Connexion BDD indisponible. La note a été sauvegardée en local de façon sécurisée.\nElle sera synchronisée dès la reconnexion.", "Mode Hors-Ligne", JOptionPane.INFORMATION_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(addNoteFrame, "Note enregistrée avec succès !");
+            }
+
+            rechargerApplication();
+            addNoteFrame.dispose();
         });
 
         JButton annulButton = themedButton("Annuler");
@@ -362,19 +674,14 @@ public class Note {
         addNoteFrame.setVisible(true);
     }
 
-    // Calcule la moyenne de chaque matière (colonnes "Note X" de tableNote)
-    // et renvoie la liste (une valeur par matière, dans l'ordre des lignes).
-    // Une matière sans note reçoit `null` dans la liste.
     static List<Double> calculMoyenneGenerale() {
         DefaultTableModel model = (DefaultTableModel) tableNote.getModel();
         List<Double> moyennesParMatiere = new ArrayList<>();
 
-        // Parcourt chaque matière (chaque ligne du tableau)
         for (int row = 0; row < model.getRowCount(); row++) {
             double sommeNotes = 0;
             double sommeQuotients = 0;
 
-            // Parcourt toutes les colonnes "Note X" de cette matière (à partir de la colonne 1)
             for (int col = 1; col < model.getColumnCount(); col++) {
                 Object valeur = model.getValueAt(row, col);
                 String texte = (valeur == null) ? "" : valeur.toString();
@@ -386,26 +693,15 @@ public class Note {
                 }
             }
 
-            // Si la matière a au moins une note, on calcule sa moyenne pondérée
             if (sommeQuotients > 0) {
-                moyennesParMatiere.add((sommeNotes / sommeQuotients) * 20); // ramenée sur 20
+                moyennesParMatiere.add((sommeNotes / sommeQuotients) * 20);
             } else {
-                moyennesParMatiere.add(null); // pas encore de note pour cette matière
+                moyennesParMatiere.add(null);
             }
         }
-
-        // Moyenne générale = moyenne des moyennes de chaque matière (on ignore les matières sans note)
-        double moyenneGenerale = moyennesParMatiere.stream()
-                .filter(v -> v != null)
-                .mapToDouble(Double::doubleValue)
-                .average()
-                .orElse(0);
-
-        System.out.format("Moyenne générale : %.2f/20%n", moyenneGenerale);
         return moyennesParMatiere;
     }
 
-    // Applique le style "thème" à un JTextField (fond, texte, bordure, curseur)
     static void styleTextField(JTextField field) {
         field.setFont(Theme.FONT_LABEL);
         field.setBackground(Theme.SURFACE);
@@ -416,43 +712,83 @@ public class Note {
                 new EmptyBorder(4, 6, 4, 6)));
     }
 
-    // Applique le style "thème" à un JLabel (police + couleur de texte)
     static void styleLabel(JLabel label) {
         label.setFont(Theme.FONT_LABEL);
         label.setForeground(Theme.TEXT_PRIMARY);
     }
 
+    static Object[][] donneesInitiales;
+    static String[] colonnesInitiales;
+
+    static void chargerDonneesInitiales() {
+        List<String> noms = MatiereDAO.listerNoms();
+        List<List<String>> notesParMatiere = new ArrayList<>();
+        int maxNotes = 0;
+
+        for (String nom : noms) {
+            Integer id = MatiereDAO.trouverIdParNom(nom);
+            List<String> notesMatiere = (id != null) ? NoteDAO.listerPourMatiere(id) : new ArrayList<>();
+            
+            // Inclut également les notes présentes dans le cache local hors-ligne s'il existe
+            List<String> offlineLines = SecureOfflineStorage.lireNotesHorsLigne();
+            for (String line : offlineLines) {
+                String[] p = line.split(";");
+                if (p.length == 3 && p[0].equals(nom)) {
+                    notesMatiere.add(p[1] + "/" + p[2] + " (Local)");
+                }
+            }
+
+            notesParMatiere.add(notesMatiere);
+            maxNotes = Math.max(maxNotes, notesMatiere.size());
+        }
+        if (maxNotes == 0) maxNotes = 1;
+
+        colonnesInitiales = new String[maxNotes + 1];
+        colonnesInitiales[0] = "Matière";
+        for (int i = 1; i <= maxNotes; i++) colonnesInitiales[i] = "Note " + i;
+
+        donneesInitiales = new Object[noms.size()][maxNotes + 1];
+        for (int i = 0; i < noms.size(); i++) {
+            donneesInitiales[i][0] = noms.get(i);
+            List<String> notesMatiere = notesParMatiere.get(i);
+            for (int c = 1; c <= maxNotes; c++) {
+                donneesInitiales[i][c] = (c - 1 < notesMatiere.size()) ? notesMatiere.get(c - 1) : "";
+            }
+        }
+
+        columnNote[0] = maxNotes + 1;
+    }
+
     public static void main(String[] args) {
 
-        // ConnectNas();
+        boolean isConnected = Database.connecter();
+        if (isConnected) {
+            Database.creerTables();
+            Database.seedMatieresSiVide();
+        }
 
-        // Applique un thème sombre global à tous les composants Swing
-        // créés par la suite (JFrame, JOptionPane, etc.), pour garder
-        // une cohérence visuelle même dans les fenêtres secondaires.
+        chargerDonneesInitiales();
+
         UIManager.put("Panel.background", Theme.BACKGROUND);
         UIManager.put("OptionPane.background", Theme.BACKGROUND);
         UIManager.put("OptionPane.messageForeground", Theme.TEXT_PRIMARY);
         UIManager.put("Button.background", Theme.ACCENT);
         UIManager.put("Button.foreground", Theme.TEXT_ON_ACCENT);
 
-        // Création de la fenêtre principale
         JFrame frame = new JFrame("Centrale Étudiant");
         frame.setSize(1000, 800);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.getContentPane().setBackground(Theme.BACKGROUND);
 
-        // Titre en haut de la fenêtre
         JLabel titleLabel = new JLabel("Centrale Étudiant", SwingConstants.CENTER);
         titleLabel.setFont(Theme.FONT_TITLE);
         titleLabel.setForeground(Theme.TEXT_PRIMARY);
         titleLabel.setBorder(new EmptyBorder(16, 0, 16, 0));
 
-        // Modèle du tableau des notes : seule la case (ligne 0, colonne 1) est éditable directement.
-        // C'est CE modèle qui gagne des colonnes "Note X" à chaque nouvelle note.
-        DefaultTableModel tableUnClickable = new DefaultTableModel(matière, colonnes) {
+        DefaultTableModel tableUnClickable = new DefaultTableModel(donneesInitiales, colonnesInitiales) {
             @Override
             public boolean isCellEditable(int row, int column) {
-                return column == 1 && row == 0;
+                return false;
             }
         };
 
@@ -465,18 +801,19 @@ public class Note {
         scroll.getViewport().setBackground(Theme.SURFACE);
         scroll.setBorder(new EmptyBorder(0, 20, 0, 20));
 
-        // Modèle SÉPARÉ pour le tableau des moyennes : 2 colonnes FIXES ("Matière", "Moyenne").
-        // Il n'est jamais touché par model.addColumn(...) — seul tableNote grandit.
         DefaultTableModel modelMoyenne = new DefaultTableModel(new String[]{"Matière", "Moyenne"}, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
-                return false; // lecture seule : c'est un affichage calculé
+                return false;
             }
         };
-        // Pré-remplit une ligne par matière, moyenne vide au départ
+
         ListMatiere();
-        for (String nom : nomsMatieres) {
-            modelMoyenne.addRow(new Object[]{ nom, "" });
+        List<Double> moyennesInitiales = calculMoyenneGenerale();
+        for (int i = 0; i < nomsMatieres.length; i++) {
+            Double m = (i < moyennesInitiales.size()) ? moyennesInitiales.get(i) : null;
+            String affichage = (m == null) ? "" : String.format("%.2f", m);
+            modelMoyenne.addRow(new Object[]{ nomsMatieres[i], affichage });
         }
 
         tableMoyenne = new JTable(modelMoyenne);
@@ -488,15 +825,16 @@ public class Note {
         scrollMoyenne.getViewport().setBackground(Theme.SURFACE);
         scrollMoyenne.setBorder(new EmptyBorder(0, 20, 0, 20));
 
-        //Table pour les 2 tableaux 
-        JPanel tablesPanel = new JPanel(new GridLayout(2, 1, 0, 12)); // 2 lignes, 1 colonne, espacement vertical de 12px
+        JPanel tablesPanel = new JPanel(new GridLayout(2, 1, 0, 12));
         tablesPanel.setBackground(Theme.BACKGROUND);
-        tablesPanel.add(scroll);          // tableau des notes en haut
-        tablesPanel.add(scrollMoyenne);   // tableau des moyennes en dessous
+        tablesPanel.add(scroll);
+        tablesPanel.add(scrollMoyenne);
 
-        // Boutons d'action, stylés via themedButton()
         JButton btnNote = themedButton("Ajouter Une Note");
         btnNote.addActionListener(e -> AddNote());
+
+        JButton btnDeleteNote = themedButton("Supprimer Une Note");
+        btnDeleteNote.addActionListener(e -> DeleteNote());
 
         JButton btnMatiere = themedButton("Ajouter Une Matière");
         btnMatiere.addActionListener(e -> AddMatiere());
@@ -505,21 +843,20 @@ public class Note {
         btnSurround.setBackground(Theme.BACKGROUND);
         btnSurround.setBorder(new EmptyBorder(16, 0, 16, 0));
         btnSurround.add(btnNote);
+        btnSurround.add(btnDeleteNote);
         btnSurround.add(btnMatiere);
 
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBackground(Theme.BACKGROUND);
         panel.add(titleLabel, BorderLayout.NORTH);
-        panel.add(tablesPanel, BorderLayout.CENTER);   // le tableau prend tout l'espace disponible
-        panel.add(btnSurround, BorderLayout.SOUTH); // les boutons en bas, hauteur minimale
+        panel.add(tablesPanel, BorderLayout.CENTER);
+        panel.add(btnSurround, BorderLayout.SOUTH);
 
         frame.getContentPane().add(panel);
-        frame.setLocationRelativeTo(null); // centre la fenêtre à l'écran
+        frame.setLocationRelativeTo(null);
         frame.setVisible(true);
     }
 
-    // Applique le style "thème" au tableau : couleurs, police,
-    // hauteur de ligne, style de l'en-tête et de la sélection.
     static void styleTable(JTable table) {
         table.setFont(Theme.FONT_TABLE);
         table.setForeground(Theme.TEXT_PRIMARY);
