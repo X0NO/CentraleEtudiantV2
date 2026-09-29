@@ -8,15 +8,15 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -24,10 +24,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
-import javax.crypto.Cipher;
-import javax.crypto.spec.SecretKeySpec;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
@@ -54,13 +52,11 @@ public class Note {
     // =====================================================================
     // CONNEXION BASE DE DONNÉES
     // =====================================================================
-   public static  Dotenv dotenv = Dotenv.load();
+    public static Dotenv dotenv = Dotenv.load();
 
     private static final String urlDB = dotenv.get("DB_URL");
     private static final String USER = dotenv.get("DB_USERNAME");
-    private static final String PASSWORD =dotenv.get("DB_PASSWORD");
-
-    private static final String FILE_OFFLINE_CACHE = "offline_notes.dat";
+    private static final String PASSWORD = dotenv.get("DB_PASSWORD");
 
     private static final String[] MATIERES_PAR_DEFAUT = {
             "Intro_Syst", "Init_Dev", "Maths", "Intro_BD", "Anglais", "Commu", "PPP", "Dev_Web"
@@ -92,102 +88,228 @@ public class Note {
     static String[] nomsMatieres = new String[0];
 
     // =====================================================================
-    // STOCKAGE HORS-LIGNE SÉCURISÉ (CHIFFREMENT AES)
+    // MIROIR CSV LOCAL (2e TÉMOIN DES NOTES)
+    //
+    // Fichier notes_backup.csv, une ligne par matière ou par note :
+    //     type;matiere;valeur;quotient;statut
+    //   type   : M (matière) ou N (note)
+    //   statut : SYNC = présent dans la BDD ET dans le fichier
+    //            ADD  = ajouté hors-ligne, pas encore envoyé à la BDD
+    //            DEL  = supprimé hors-ligne, pas encore supprimé de la BDD
+    //
+    // Règles :
+    //  - chaque ajout/suppression met à jour la BDD ET le CSV en même temps ;
+    //  - BDD injoignable : le CSV sert de témoin (affichage + modifications) ;
+    //  - retour en ligne : s'il n'y a rien d'en attente dans le CSV, il est
+    //    réécrit à partir de la BDD ; sinon les changements en attente sont
+    //    appliqués à la BDD, puis le CSV est réaligné sur la BDD.
     // =====================================================================
-    static final class SecureOfflineStorage {
-        private static final String SECRET_KEY = "CentraleStudentSecretKeyForCache";
+    static final class CsvMirror {
+        static final String FILE = "notes_backup.csv";
+        static final String HEADER = "type;matiere;valeur;quotient;statut";
+        static final String SYNC = "SYNC";
+        static final String ADD = "ADD";
+        static final String DEL = "DEL";
 
-        private static SecretKeySpec getKey() throws Exception {
-            byte[] key = SECRET_KEY.getBytes(StandardCharsets.UTF_8);
-            MessageDigest sha = MessageDigest.getInstance("SHA-256");
-            key = sha.digest(key);
-            key = Arrays.copyOf(key, 16); // 128 bit key
-            return new SecretKeySpec(key, "AES");
+        static final class Entry {
+            final String type;
+            final String matiere;
+            final int valeur;
+            final int quotient;
+            String statut;
+
+            Entry(String type, String matiere, int valeur, int quotient, String statut) {
+                this.type = type;
+                this.matiere = matiere;
+                this.valeur = valeur;
+                this.quotient = quotient;
+                this.statut = statut;
+            }
+
+            boolean estNote() {
+                return type.equals("N");
+            }
+
+            boolean memeNote(String m, int v, int q) {
+                return estNote() && matiere.equals(m) && valeur == v && quotient == q;
+            }
+
+            String toLine() {
+                return type + ";" + matiere + ";" + valeur + ";" + quotient + ";" + statut;
+            }
         }
 
-        public static synchronized void sauvegarderNoteHorsLigne(String nomMatiere, int valeur, int quotient) {
+        /** Lit le CSV. Si la lecture échoue, on lève une exception plutôt que d'écraser le fichier ensuite. */
+        static synchronized List<Entry> lire() {
+            List<Entry> res = new ArrayList<>();
+            Path p = Paths.get(FILE);
+            if (!Files.exists(p)) return res;
             try {
-                List<String> lignes = lireNotesHorsLigne();
-                lignes.add(nomMatiere + ";" + valeur + ";" + quotient);
-
-                StringBuilder sb = new StringBuilder();
-                for (String line : lignes) {
-                    sb.append(line).append("\n");
-                }
-
-                Cipher cipher = Cipher.getInstance("AES");
-                cipher.init(Cipher.ENCRYPT_MODE, getKey());
-                byte[] encryptedBytes = cipher.doFinal(sb.toString().getBytes(StandardCharsets.UTF_8));
-
-                try (FileOutputStream fos = new FileOutputStream(FILE_OFFLINE_CACHE)) {
-                    fos.write(encryptedBytes);
-                }
-            } catch (Exception e) {
-                System.err.println("Erreur lors de la sauvegarde sécurisée hors-ligne : " + e.getMessage());
-            }
-        }
-
-        public static synchronized List<String> lireNotesHorsLigne() {
-            List<String> resultats = new ArrayList<>();
-            File file = new File(FILE_OFFLINE_CACHE);
-            if (!file.exists()) return resultats;
-
-            try (FileInputStream fis = new FileInputStream(file)) {
-                byte[] data = fis.readAllBytes();
-                if (data.length == 0) return resultats;
-
-                Cipher cipher = Cipher.getInstance("AES");
-                cipher.init(Cipher.DECRYPT_MODE, getKey());
-                byte[] decryptedBytes = cipher.doFinal(data);
-
-                String content = new String(decryptedBytes, StandardCharsets.UTF_8);
-                String[] lines = content.split("\n");
-                for (String line : lines) {
-                    if (!line.trim().isEmpty()) {
-                        resultats.add(line.trim());
+                for (String line : Files.readAllLines(p, StandardCharsets.UTF_8)) {
+                    String[] parts = line.split(";");
+                    if (parts.length != 5 || parts[0].equals("type")) continue;
+                    try {
+                        res.add(new Entry(parts[0], parts[1],
+                                Integer.parseInt(parts[2]), Integer.parseInt(parts[3]), parts[4]));
+                    } catch (NumberFormatException ignored) {
+                        // ligne illisible : ignorée
                     }
                 }
-            } catch (Exception e) {
-                System.err.println("Erreur de lecture du cache hors-ligne : " + e.getMessage());
+            } catch (IOException e) {
+                throw new UncheckedIOException("Lecture de " + FILE + " impossible", e);
             }
-            return resultats;
+            return res;
         }
 
-        public static synchronized void viderCache() {
-            File file = new File(FILE_OFFLINE_CACHE);
-            if (file.exists()) {
-                file.delete();
+        /** Écriture atomique (fichier temporaire puis remplacement) pour ne jamais laisser un CSV à moitié écrit. */
+        static synchronized void ecrire(List<Entry> entries) {
+            List<String> lignes = new ArrayList<>();
+            lignes.add(HEADER);
+            for (Entry e : entries) lignes.add(e.toLine());
+            try {
+                Path tmp = Paths.get(FILE + ".tmp");
+                Files.write(tmp, lignes, StandardCharsets.UTF_8);
+                Files.move(tmp, Paths.get(FILE), StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                System.err.println("Erreur d'écriture de " + FILE + " : " + e.getMessage());
             }
         }
 
-        public static void synchroniserNotesHorsLigne() {
-            List<String> notesEnAttente = lireNotesHorsLigne();
-            if (notesEnAttente.isEmpty()) return;
+        // ---------- Mises à jour appelées en même temps que la BDD ----------
 
-            System.out.println("Synchronisation des notes saisies hors-ligne...");
-            List<String> nonSynchro = new ArrayList<>();
+        static synchronized void ajouterMatiere(String nom, boolean dbOk) {
+            List<Entry> l = lire();
+            l.add(new Entry("M", nom, 0, 0, dbOk ? SYNC : ADD));
+            ecrire(l);
+        }
 
-            for (String ligne : notesEnAttente) {
-                String[] parts = ligne.split(";");
-                if (parts.length == 3) {
-                    String matiere = parts[0];
-                    int valeur = Integer.parseInt(parts[1]);
-                    int quotient = Integer.parseInt(parts[2]);
+        static synchronized void ajouterNote(String matiere, int valeur, int quotient, boolean dbOk) {
+            List<Entry> l = lire();
+            l.add(new Entry("N", matiere, valeur, quotient, dbOk ? SYNC : ADD));
+            ecrire(l);
+        }
 
-                    Integer idMatiere = MatiereDAO.trouverIdParNom(matiere);
-                    if (idMatiere != null) {
-                        boolean ok = NoteDAO.inserer(idMatiere, valeur, quotient);
-                        if (!ok) nonSynchro.add(ligne);
-                    }
+        /**
+         * Supprime la note la plus récente correspondante (comme la BDD).
+         * Hors-ligne, une note déjà synchronisée est marquée DEL (à supprimer de la BDD plus tard),
+         * une note ajoutée hors-ligne (ADD) est simplement retirée du fichier.
+         * @return true si la note existait dans le fichier
+         */
+        static synchronized boolean supprimerNote(String matiere, int valeur, int quotient, boolean dbOk) {
+            List<Entry> l = lire();
+            for (int i = l.size() - 1; i >= 0; i--) {
+                Entry e = l.get(i);
+                if (e.memeNote(matiere, valeur, quotient) && !e.statut.equals(DEL)) {
+                    if (dbOk || e.statut.equals(ADD)) l.remove(i);
+                    else e.statut = DEL;
+                    ecrire(l);
+                    return true;
                 }
             }
+            return false;
+        }
 
-            viderCache();
-            // Si certaines n'ont pas pu s'insérer, re-sauvegarder
-            for (String line : nonSynchro) {
-                String[] p = line.split(";");
-                sauvegarderNoteHorsLigne(p[0], Integer.parseInt(p[1]), Integer.parseInt(p[2]));
+        // ---------- Lecture (utilisée pour l'affichage) ----------
+
+        static synchronized boolean matiereExiste(String nom) {
+            for (Entry e : lire()) {
+                if (e.type.equals("M") && e.matiere.equalsIgnoreCase(nom)) return true;
             }
+            return false;
+        }
+
+        static synchronized List<String> listerMatieres() {
+            List<String> noms = new ArrayList<>();
+            for (Entry e : lire()) {
+                if (e.type.equals("M")) noms.add(e.matiere);
+            }
+            return noms;
+        }
+
+        static synchronized List<String> listerNotes(String matiere) {
+            List<String> notes = new ArrayList<>();
+            for (Entry e : lire()) {
+                if (e.estNote() && e.matiere.equals(matiere) && !e.statut.equals(DEL)) {
+                    notes.add(e.valeur + "/" + e.quotient);
+                }
+            }
+            return notes;
+        }
+
+        // ---------- Comparaison / synchronisation au retour en ligne ----------
+
+        static synchronized void reconcilier() {
+            List<Entry> l = lire();
+
+            boolean enAttente = false;
+            for (Entry e : l) {
+                if (!e.statut.equals(SYNC)) { enAttente = true; break; }
+            }
+
+            if (enAttente) {
+                boolean toutOk = true;
+
+                // 1) les matières créées hors-ligne d'abord
+                for (Entry e : l) {
+                    if (e.type.equals("M") && e.statut.equals(ADD)) {
+                        boolean ok = MatiereDAO.trouverIdParNom(e.matiere) != null
+                                || MatiereDAO.inserer(e.matiere, 1.0) != -1;
+                        if (ok) e.statut = SYNC; else toutOk = false;
+                    }
+                }
+
+                // 2) puis les notes ajoutées / supprimées hors-ligne
+                Iterator<Entry> it = l.iterator();
+                while (it.hasNext()) {
+                    Entry e = it.next();
+                    if (!e.estNote() || e.statut.equals(SYNC)) continue;
+
+                    Integer id = MatiereDAO.trouverIdParNom(e.matiere);
+                    if (id == null) { toutOk = false; continue; }
+
+                    if (e.statut.equals(ADD)) {
+                        if (NoteDAO.inserer(id, e.valeur, e.quotient)) e.statut = SYNC;
+                        else toutOk = false;
+                    } else if (e.statut.equals(DEL)) {
+                        if (NoteDAO.supprimer(id, e.valeur, e.quotient) >= 0) it.remove();
+                        else toutOk = false;
+                    }
+                }
+
+                // On enregistre ce qui a pu être envoyé ; le reste reste en attente
+                ecrire(l);
+                if (!toutOk) return; // on ne touche pas au CSV tant que la BDD n'est pas à jour
+            }
+
+            // Plus rien en attente : le CSV est réaligné sur la BDD
+            reconstruireDepuisBD();
+        }
+
+        /** Réécrit le CSV à partir de la BDD. Si la lecture BDD échoue, le CSV existant n'est pas touché. */
+        static synchronized void reconstruireDepuisBD() {
+            String sql = "SELECT m.nom, n.valeur, n.quotient FROM matieres m "
+                       + "LEFT JOIN notes n ON n.matiere_id = m.id ORDER BY m.id, n.id";
+            List<Entry> l = new ArrayList<>();
+            String derniere = null;
+            try (Connection conn = Database.getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(sql);
+                 ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    String nom = rs.getString("nom");
+                    if (!nom.equals(derniere)) {
+                        l.add(new Entry("M", nom, 0, 0, SYNC));
+                        derniere = nom;
+                    }
+                    int valeur = rs.getInt("valeur");
+                    if (!rs.wasNull()) {
+                        l.add(new Entry("N", nom, valeur, rs.getInt("quotient"), SYNC));
+                    }
+                }
+            } catch (SQLException e) {
+                System.err.println("Lecture BDD impossible, CSV conservé tel quel : " + e.getMessage());
+                return;
+            }
+            ecrire(l);
         }
     }
 
@@ -200,11 +322,28 @@ public class Note {
             return DriverManager.getConnection(urlDB, USER, PASSWORD);
         }
 
+        /** true si la BDD répond. */
+        static boolean ping() {
+            try (Connection conn = getConnection()) {
+                return true;
+            } catch (SQLException e) {
+                return false;
+            }
+        }
+
+        /** Si la BDD est joignable : compare BDD et CSV, et aligne l'un sur l'autre (voir CsvMirror). */
+        static void synchroniser() {
+            if (!ping()) return;
+            try {
+                CsvMirror.reconcilier();
+            } catch (Exception e) {
+                System.err.println("Synchronisation BDD/CSV impossible : " + e.getMessage());
+            }
+        }
+
         static boolean connecter() {
             try (Connection conn = getConnection()) {
                 System.out.println("Connexion à la base de données réussie !");
-                // Tente la synchro des notes stockées en local lors des échecs précédents
-                SecureOfflineStorage.synchroniserNotesHorsLigne();
                 return true;
             } catch (SQLException e) {
                 System.err.println("Impossible de se connecter au Raspberry Pi : " + e.getMessage());
@@ -314,10 +453,10 @@ public class Note {
         }
 
         /**
-         * Supprime une note spécifique de la base de données.
+         * Supprime la note la plus récente correspondant aux critères.
+         * @return 1 = supprimée, 0 = note introuvable en BDD, -1 = erreur (BDD injoignable)
          */
-        static boolean supprimer(int matiereId, int valeur, int quotient) {
-            // Supprime la note la plus récente correspondant aux critères
+        static int supprimer(int matiereId, int valeur, int quotient) {
             String sql = "DELETE FROM notes WHERE id IN (" +
                          "  SELECT id FROM notes WHERE matiere_id = ? AND valeur = ? AND quotient = ? " +
                          "  ORDER BY id DESC LIMIT 1" +
@@ -327,11 +466,10 @@ public class Note {
                 stmt.setInt(1, matiereId);
                 stmt.setInt(2, valeur);
                 stmt.setInt(3, quotient);
-                int rowsAffected = stmt.executeUpdate();
-                return rowsAffected > 0;
+                return stmt.executeUpdate() > 0 ? 1 : 0;
             } catch (SQLException e) {
                 e.printStackTrace();
-                return false;
+                return -1;
             }
         }
 
@@ -404,7 +542,7 @@ public class Note {
     }
 
     /**
-     * Recharge complètement l'affichage de l'application à partir de la BD.
+     * Recharge complètement l'affichage de l'application (BDD si joignable, sinon CSV local).
      */
     static void rechargerApplication() {
         chargerDonneesInitiales();
@@ -485,20 +623,35 @@ public class Note {
             int quot = Integer.parseInt(parts[1]);
             String matiereChoisie = (String) comboMatiere.getSelectedItem();
 
-            Integer matiereId = MatiereDAO.trouverIdParNom(matiereChoisie);
-            if (matiereId == null) {
-                JOptionPane.showMessageDialog(deleteFrame, "Matière introuvable.", "Erreur", JOptionPane.ERROR_MESSAGE);
+            // Remet d'abord BDD et CSV d'accord si la BDD vient de revenir
+            Database.synchroniser();
+
+            // 1) BDD : 1 = supprimée, 0 = introuvable, -1 = BDD injoignable
+            int res = -1;
+            if (Database.ping()) {
+                Integer matiereId = MatiereDAO.trouverIdParNom(matiereChoisie);
+                if (matiereId != null) res = NoteDAO.supprimer(matiereId, val, quot);
+            }
+            if (res == 0) {
+                JOptionPane.showMessageDialog(deleteFrame, "Impossible de trouver cette note en BDD.", "Erreur", JOptionPane.ERROR_MESSAGE);
                 return;
             }
 
-            boolean succes = NoteDAO.supprimer(matiereId, val, quot);
-            if (succes) {
-                JOptionPane.showMessageDialog(deleteFrame, "Note supprimée avec succès !");
-                rechargerApplication();
-                deleteFrame.dispose();
-            } else {
-                JOptionPane.showMessageDialog(deleteFrame, "Impossible de trouver cette note en BDD.", "Erreur", JOptionPane.ERROR_MESSAGE);
+            // 2) CSV local : mis à jour en même temps, dans tous les cas
+            boolean dbOk = (res == 1);
+            boolean trouveCsv = CsvMirror.supprimerNote(matiereChoisie, val, quot, dbOk);
+            if (!dbOk && !trouveCsv) {
+                JOptionPane.showMessageDialog(deleteFrame, "Note introuvable dans le fichier local.", "Erreur", JOptionPane.ERROR_MESSAGE);
+                return;
             }
+
+            if (dbOk) {
+                JOptionPane.showMessageDialog(deleteFrame, "Note supprimée avec succès !");
+            } else {
+                JOptionPane.showMessageDialog(deleteFrame, "Connexion BDD indisponible. La note a été supprimée du fichier local.\nElle sera supprimée de la BDD dès la reconnexion.", "Mode Hors-Ligne", JOptionPane.INFORMATION_MESSAGE);
+            }
+            rechargerApplication();
+            deleteFrame.dispose();
         });
 
         JButton btnAnnuler = themedButton("Annuler");
@@ -553,11 +706,26 @@ public class Note {
                 JOptionPane.showMessageDialog(addMatiereFrame, "Le nom ne peut pas être vide.", "Erreur", JOptionPane.ERROR_MESSAGE);
                 return;
             }
-
-            int nouvelId = MatiereDAO.inserer(saisie, 1.0);
-            if (nouvelId == -1) {
-                JOptionPane.showMessageDialog(addMatiereFrame, "Erreur lors de l'enregistrement ou matière existante.", "Erreur", JOptionPane.ERROR_MESSAGE);
+            if (saisie.contains(";")) {
+                JOptionPane.showMessageDialog(addMatiereFrame, "Le caractère ';' est interdit dans le nom (séparateur du CSV).", "Erreur", JOptionPane.ERROR_MESSAGE);
                 return;
+            }
+
+            Database.synchroniser();
+
+            if (Database.ping()) {
+                if (MatiereDAO.inserer(saisie, 1.0) == -1) {
+                    JOptionPane.showMessageDialog(addMatiereFrame, "Erreur lors de l'enregistrement ou matière existante.", "Erreur", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                CsvMirror.ajouterMatiere(saisie, true);
+            } else {
+                if (CsvMirror.matiereExiste(saisie)) {
+                    JOptionPane.showMessageDialog(addMatiereFrame, "Cette matière existe déjà.", "Erreur", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                CsvMirror.ajouterMatiere(saisie, false);
+                JOptionPane.showMessageDialog(addMatiereFrame, "Connexion BDD indisponible. La matière a été enregistrée dans le fichier local.\nElle sera envoyée à la BDD dès la reconnexion.", "Mode Hors-Ligne", JOptionPane.INFORMATION_MESSAGE);
             }
 
             rechargerApplication();
@@ -636,6 +804,10 @@ public class Note {
             }
 
             String matiereChoisie = (String) comboMatiere.getSelectedItem();
+
+            // Remet d'abord BDD et CSV d'accord si la BDD vient de revenir
+            Database.synchroniser();
+
             Integer matiereId = MatiereDAO.trouverIdParNom(matiereChoisie);
 
             // tentative d'insertion BDD
@@ -644,10 +816,12 @@ public class Note {
                 insertionOk = NoteDAO.inserer(matiereId, note, quotient);
             }
 
+            // Le CSV local est mis à jour en même temps que la BDD
+            // (statut SYNC si la BDD a accepté la note, ADD si elle reste à envoyer)
+            CsvMirror.ajouterNote(matiereChoisie, note, quotient, insertionOk);
+
             if (!insertionOk) {
-                // Échec de la connexion au Raspberry Pi : stockage local chiffré
-                SecureOfflineStorage.sauvegarderNoteHorsLigne(matiereChoisie, note, quotient);
-                JOptionPane.showMessageDialog(addNoteFrame, "Connexion BDD indisponible. La note a été sauvegardée en local de façon sécurisée.\nElle sera synchronisée dès la reconnexion.", "Mode Hors-Ligne", JOptionPane.INFORMATION_MESSAGE);
+                JOptionPane.showMessageDialog(addNoteFrame, "Connexion BDD indisponible. La note a été sauvegardée dans le fichier local (CSV).\nElle sera envoyée à la BDD dès la reconnexion.", "Mode Hors-Ligne", JOptionPane.INFORMATION_MESSAGE);
             } else {
                 JOptionPane.showMessageDialog(addNoteFrame, "Note enregistrée avec succès !");
             }
@@ -720,24 +894,20 @@ public class Note {
     static Object[][] donneesInitiales;
     static String[] colonnesInitiales;
 
+    /**
+     * Charge les données à afficher depuis le CSV local.
+     * Juste avant, si la BDD est joignable, BDD et CSV sont comparés puis alignés
+     * (le CSV reflète donc la BDD en ligne, et reste le témoin hors-ligne).
+     */
     static void chargerDonneesInitiales() {
-        List<String> noms = MatiereDAO.listerNoms();
+        Database.synchroniser();
+
+        List<String> noms = CsvMirror.listerMatieres();
         List<List<String>> notesParMatiere = new ArrayList<>();
         int maxNotes = 0;
 
         for (String nom : noms) {
-            Integer id = MatiereDAO.trouverIdParNom(nom);
-            List<String> notesMatiere = (id != null) ? NoteDAO.listerPourMatiere(id) : new ArrayList<>();
-            
-            // Inclut également les notes présentes dans le cache local hors-ligne s'il existe
-            List<String> offlineLines = SecureOfflineStorage.lireNotesHorsLigne();
-            for (String line : offlineLines) {
-                String[] p = line.split(";");
-                if (p.length == 3 && p[0].equals(nom)) {
-                    notesMatiere.add(p[1] + "/" + p[2] + " (Local)");
-                }
-            }
-
+            List<String> notesMatiere = CsvMirror.listerNotes(nom);
             notesParMatiere.add(notesMatiere);
             maxNotes = Math.max(maxNotes, notesMatiere.size());
         }
@@ -761,12 +931,16 @@ public class Note {
 
     public static void main(String[] args) {
 
+        // Évite de figer l'appli plusieurs secondes à chaque test si le Raspberry Pi est injoignable
+        DriverManager.setLoginTimeout(3);
+
         boolean isConnected = Database.connecter();
         if (isConnected) {
             Database.creerTables();
             Database.seedMatieresSiVide();
         }
 
+        // Compare BDD/CSV (si en ligne) puis charge l'affichage
         chargerDonneesInitiales();
 
         UIManager.put("Panel.background", Theme.BACKGROUND);

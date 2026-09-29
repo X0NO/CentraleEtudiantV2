@@ -1,0 +1,12 @@
+type;matiere;valeur;quotient;statut
+M;Intro_Syst;0;0;SYNC
+N;Intro_Syst;5;20;SYNC
+M;Init_Dev;0;0;SYNC
+N;Init_Dev;16;20;SYNC
+M;Maths;0;0;SYNC
+N;Maths;17;20;SYNC
+M;Intro_BD;0;0;SYNC
+M;Anglais;0;0;SYNC
+M;Commu;0;0;SYNC
+M;PPP;0;0;SYNC
+M;Dev_Web;0;0;SYNC
