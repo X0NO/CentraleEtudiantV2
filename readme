@@ -146,7 +146,7 @@ Classes à lancer : `com.centrale.Note` et `com.centrale.Calendar`.
 
 Règles de saisie : la note ne peut pas dépasser le quotient, le coefficient doit être supérieur à 0 (2 chiffres avant et après la virgule au maximum, `2`, `0.5` et `1,5` sont acceptés), et le caractère `;` est interdit dans un nom de matière (c'est le séparateur du CSV).
 
-Au premier lancement, si la base est vide, 8 matières par défaut sont créées : `Intro_Syst`, `Init_Dev`, `Maths`, `Intro_BD`, `Anglais`, `Commu`, `PPP`, `Dev_Web`.
+Au premier lancement, aucune matière n'existe : chacun ajoute les siennes avec **Ajouter Une Matière** avant de saisir des notes.
 
 ### Calcul de la moyenne
 

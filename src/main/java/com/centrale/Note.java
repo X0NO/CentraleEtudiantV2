@@ -49,10 +49,6 @@ public class Note {
     // Base facultative : adresse et identifiants dans les Paramètres (voir Config).
     // Sans base configurée, tout reste dans le fichier CSV local.
 
-    private static final String[] MATIERES_PAR_DEFAUT = {
-            "Intro_Syst", "Init_Dev", "Maths", "Intro_BD", "Anglais", "Commu", "PPP", "Dev_Web"
-    };
-
     static int[] columnNote = {2};
     static JTable tableNote;
     static JTable tableMoyenne;
@@ -364,13 +360,6 @@ public class Note {
                 schemaPret = true;
             } catch (SQLException e) {
                 e.printStackTrace();
-            }
-        }
-
-        static void seedMatieresSiVide() {
-            if (!MatiereDAO.listerNoms().isEmpty()) return;
-            for (String nom : MATIERES_PAR_DEFAUT) {
-                MatiereDAO.inserer(nom, 1.0);
             }
         }
     }
@@ -724,6 +713,12 @@ public class Note {
     }
 
     static void AddNote() {
+        ListMatiere();
+        if (nomsMatieres.length == 0) {
+            JOptionPane.showMessageDialog(fenetre, "Ajoute d'abord une matière (bouton « Ajouter Une Matière »).", "Aucune matière", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
         JFrame addNoteFrame = new JFrame("Nouvelle Note");
         addNoteFrame.setSize(600, 340);
         addNoteFrame.setLocationRelativeTo(null);
@@ -930,13 +925,9 @@ public class Note {
         // Évite de figer l'appli plusieurs secondes à chaque test si le Raspberry Pi est injoignable
         DriverManager.setLoginTimeout(3);
 
-        boolean isConnected = Database.connecter();
-        if (isConnected) {
+        // Aucune matière au premier lancement : l'utilisateur ajoute les siennes
+        if (Database.connecter()) {
             Database.creerTables();
-            Database.seedMatieresSiVide();
-        } else if (!Files.exists(CsvMirror.FILE)) {
-            // Tout premier lancement sans base : on part des matières par défaut
-            for (String nom : MATIERES_PAR_DEFAUT) CsvMirror.ajouterMatiere(nom, false);
         }
 
         // Compare BDD/CSV (si en ligne) puis charge l'affichage
