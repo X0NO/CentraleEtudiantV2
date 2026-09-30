@@ -1,3 +1,5 @@
+<p align="center"><img src="packaging/icone.svg" alt="Logo Centrale Étudiant" width="128"></p>
+
 # Centrale Étudiant
 
 Deux petites applications de bureau (Java Swing) pour la vie étudiante :
@@ -26,7 +28,7 @@ Rien à installer à part l'appli elle-même : Java est inclus.
 1. Télécharger le fichier correspondant à son système sur la page **Releases** du dépôt GitHub :
    - **Windows** : `CentraleEtudiant-<version>.msi` (installateur, sans droits administrateur) ou `CentraleEtudiant-<version>-windows-x64.zip` (décompresser, puis lancer `CentraleEtudiant.exe`)
    - **Linux (Debian / Ubuntu / Mint)** : `centrale-etudiant_<version>_amd64.deb` (`sudo apt install ./centrale-etudiant_*.deb`)
-   - **Linux (toutes distributions)** : `CentraleEtudiant-<version>-linux-x64.tar.gz` (décompresser, puis lancer `CentraleEtudiant/bin/CentraleEtudiant`)
+   - **Linux (toutes distributions)** : `CentraleEtudiant-<version>-linux-x64.tar.gz` (décompresser, puis lancer `CentraleEtudiant/bin/CentraleEtudiant` ; pour l'avoir dans le menu, voir [ci-dessous](#linux-hors-debian--ajouter-lappli-au-menu))
 2. Au premier lancement, la fenêtre **Paramètres** demande :
    - le **lien iCal** de l'emploi du temps (ADE : « Export agenda » → « Générer URL ») ;
    - l'**adresse Gmail** et un **mot de passe d'application** Google (créé sur https://myaccount.google.com/apppasswords, nécessite la validation en deux étapes) ;
@@ -44,6 +46,38 @@ Réglages et données (CSV des notes et des devoirs) sont propres à chaque util
 
 Le mot de passe d'application est stocké en clair dans `config.properties` (lisible uniquement par l'utilisateur sous Linux) : ne pas partager ce fichier.
 
+### Linux hors Debian : ajouter l'appli au menu
+
+Avec le `.tar.gz` (Arch, Fedora, etc.), l'appli n'apparaît pas toute seule dans le menu ou la recherche d'applications. Pour l'ajouter, sans droits administrateur :
+
+```bash
+# 1. L'appli (dossier décompressé du .tar.gz, ou target/dist/CentraleEtudiant après construction)
+mkdir -p ~/.local/opt
+cp -r CentraleEtudiant ~/.local/opt/
+
+# 2. L'icône
+mkdir -p ~/.local/share/icons/hicolor/scalable/apps
+cp packaging/icone.svg ~/.local/share/icons/hicolor/scalable/apps/centrale-etudiant.svg
+
+# 3. L'entrée du menu
+mkdir -p ~/.local/share/applications
+cat > ~/.local/share/applications/centrale-etudiant.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=Centrale Étudiant
+Comment=Notes, emploi du temps, devoirs et mails de l'université
+Exec=$HOME/.local/opt/CentraleEtudiant/bin/CentraleEtudiant
+Icon=centrale-etudiant
+Terminal=false
+Categories=Education;
+Keywords=notes;devoirs;calendrier;mails;
+StartupWMClass=com-centrale-Main
+EOF
+update-desktop-database ~/.local/share/applications
+```
+
+« Centrale Étudiant » apparaît ensuite dans la recherche d'applications (au besoin après une reconnexion). Pour mettre à jour, remplacer le dossier `~/.local/opt/CentraleEtudiant`.
+
 ## Construire les paquets
 
 | Commande | Résultat |
@@ -58,6 +92,16 @@ Sans machine Windows : le workflow GitHub Actions `.github/workflows/paquets.yml
 
 - Lancement manuel : onglet **Actions → Paquets → Run workflow**, fichiers dans « Artifacts ».
 - Publier une version : `git tag v1.0.0 && git push origin v1.0.0` ; les fichiers sont joints à une **Release**, dont le lien peut être envoyé aux amis.
+
+### Logo et icônes
+
+Le logo (une toque de diplômé posée sur un livre ouvert) est dessiné en vectoriel dans `packaging/icone.svg`. Après l'avoir modifié, `packaging/generer-icones.sh` régénère toutes les icônes (nécessite `rsvg-convert` et Python avec Pillow) :
+
+| Fichier | Utilisation |
+|---|---|
+| `src/main/resources/icone-64.png`, `icone-256.png` | Icône des fenêtres (chargée par `Theme`) |
+| `packaging/icone.png` (512 px) | Paquets Linux (`jpackage --icon`) |
+| `packaging/icone.ico` (16 à 256 px) | Paquets Windows |
 
 Classe principale : `com.centrale.Main` (tableau de bord). `Note`, `Calendar`, `Devoirs` et `Mails` se lancent aussi seuls.
 

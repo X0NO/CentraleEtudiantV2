@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Logo Centrale Étudiant : toque de diplômé posée sur un livre ouvert.
+       Source des icônes : packaging/generer-icones.sh produit les PNG / ICO à partir de ce fichier. -->
+  <defs>
+    <linearGradient id="fond" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#89B4FA"/>
+      <stop offset="1" stop-color="#2E5CC7"/>
+    </linearGradient>
+    <linearGradient id="reflet" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E3ECFD"/>
+    </linearGradient>
+    <linearGradient id="toque" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2A2F4A"/>
+      <stop offset="1" stop-color="#11111B"/>
+    </linearGradient>
+    <filter id="ombre" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#0B1B4D" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- fond arrondi -->
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#fond)"/>
+  <rect x="24" y="24" width="464" height="232" rx="108" fill="url(#reflet)"/>
+
+  <g filter="url(#ombre)">
+    <!-- livre ouvert -->
+    <path d="M256 318 C212 290 158 284 106 292 L106 404 C158 396 212 402 256 430 Z" fill="url(#page)"/>
+    <path d="M256 318 C300 290 354 284 406 292 L406 404 C354 396 300 402 256 430 Z" fill="url(#page)"/>
+    <path d="M256 318 L256 430" stroke="#9DB9F2" stroke-width="6" stroke-linecap="round"/>
+    <!-- lignes de texte -->
+    <g stroke="#B7CBF5" stroke-width="9" stroke-linecap="round" fill="none">
+      <path d="M136 330 C170 326 204 330 230 342"/>
+      <path d="M136 360 C170 356 204 360 230 372"/>
+      <path d="M282 342 C308 330 342 326 376 330"/>
+      <path d="M282 372 C308 360 342 356 376 360"/>
+    </g>
+
+    <!-- toque : calotte puis plateau -->
+    <path d="M168 196 L168 258 C168 284 212 300 256 300 C300 300 344 284 344 258 L344 196 Z" fill="url(#toque)"/>
+    <path d="M256 96 L436 176 L256 256 L76 176 Z" fill="url(#toque)"/>
+    <path d="M256 108 L408 176 L256 244 L104 176 Z" fill="#FFFFFF" fill-opacity="0.07"/>
+    <!-- pompon doré -->
+    <path d="M256 176 L392 214 L392 282" stroke="#F9C74F" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <circle cx="256" cy="176" r="14" fill="#F9C74F"/>
+    <path d="M378 278 L406 278 L412 318 L372 318 Z" fill="#F9C74F"/>
+  </g>
+</svg>
