@@ -1,0 +1,210 @@
+# Centrale Étudiant
+
+Deux petites applications de bureau (Java Swing) pour la vie étudiante :
+
+| Fichier | Rôle |
+|---|---|
+| `Note.java` | Gestion des notes par matière, avec coefficients, moyennes pondérées, base PostgreSQL et sauvegarde locale CSV |
+| `Calendar.java` | Agenda hebdomadaire en grille (façon ADE) alimenté par un lien iCal (emploi du temps) |
+
+Les deux partagent le même style visuel (thème sombre). Ce sont deux programmes indépendants, chacun avec son propre `main`.
+
+---
+
+## ⚠️ Vibecoding
+
+**À partir de ce commit, je « vibecode » ce projet** : le code est écrit avec l'aide d'une IA, en décrivant ce que je veux plutôt qu'en l'écrivant ligne par ligne. Je le fais pour des raisons de **rapidité** et de **nécessité**.
+
+Concrètement : le code peut contenir des bugs ou des choix que je n'ai pas relus en détail. Les remarques et corrections sont les bienvenues.
+
+---
+
+## Prérequis
+
+- Java 17 ou plus récent
+- Projet Maven avec les dépendances :
+  - `dotenv-java` (lecture du fichier `.env`)
+  - le driver JDBC PostgreSQL (pour `Note.java`)
+  - `biweekly` (lecture du format iCal, pour `Calendar.java`)
+- Une base PostgreSQL joignable (dans mon cas, sur un Raspberry Pi) pour `Note.java`
+- Un lien iCal de l'emploi du temps pour `Calendar.java`
+
+### Fichier `.env` (à la racine du projet, ne pas le commiter)
+
+```env
+# Note.java
+DB_URL=jdbc:postgresql://<URL_BDD>
+DB_USERNAME=<utilisateur>
+DB_PASSWORD=<mot_de_passe>
+
+# Calendar.java
+ICARL_URL=https://<lien-ical-de-l-emploi-du-temps>
+```
+
+Lancer les programmes depuis la **racine du projet** : le `.env` et le fichier `notes_backup.csv` sont cherchés dans le dossier de travail.
+
+Classes à lancer : `com.centrale.Note` et `com.centrale.Calendar`.
+
+---
+
+## `Note.java` : gestion des notes
+
+### Ce que fait l'application
+
+- Un tableau des notes par matière (une colonne par note, affichée sous la forme `15/20 (coef 2)`)
+- Un tableau des moyennes par matière
+- Trois boutons :
+  - **Ajouter Une Note** : matière, note au format `note/quotient` (ex. `15/20`) et coefficient (1 par défaut)
+  - **Supprimer la note sélectionnée** : on clique sur la case d'une note dans le tableau, puis sur le bouton
+  - **Ajouter Une Matière**
+
+Règles de saisie : la note ne peut pas dépasser le quotient, le coefficient doit être supérieur à 0 (2 chiffres avant et après la virgule au maximum, `2`, `0.5` et `1,5` sont acceptés), et le caractère `;` est interdit dans un nom de matière (c'est le séparateur du CSV).
+
+Au premier lancement, si la base est vide, 8 matières par défaut sont créées : `Intro_Syst`, `Init_Dev`, `Maths`, `Intro_BD`, `Anglais`, `Commu`, `PPP`, `Dev_Web`.
+
+### Calcul de la moyenne
+
+Moyenne pondérée par matière, sur 20 :
+
+```
+moyenne = somme( (note / quotient) × coefficient ) / somme( coefficient ) × 20
+```
+
+Exemple : `10/20 (coef 1)` et `20/20 (coef 3)` donnent `(0,5×1 + 1×3) / 4 × 20 = 17,5`.
+
+### Double sauvegarde : BDD + CSV
+
+Les notes ont deux témoins : la base PostgreSQL et un fichier local `notes_backup.csv`.
+
+- À chaque ajout ou suppression (note ou matière), la **BDD et le CSV sont mis à jour en même temps**.
+- Si la **BDD est injoignable**, le CSV sert de témoin : l'affichage, les ajouts et les suppressions continuent de fonctionner à partir de lui.
+- Au **retour de la BDD**, les deux sont comparés et alignés :
+  - rien en attente dans le CSV : le CSV est réécrit à partir de la BDD ;
+  - des changements faits hors-ligne : ils sont d'abord envoyés à la BDD, puis le CSV est réaligné sur elle ;
+  - si l'envoi échoue en cours de route, le CSV n'est **pas** écrasé et le reste attend la prochaine tentative.
+- Si la lecture de la BDD échoue, le CSV existant n'est jamais écrasé.
+
+Cette comparaison se fait au démarrage, à chaque rechargement de l'affichage et avant chaque action.
+
+#### Format de `notes_backup.csv`
+
+```csv
+type;matiere;valeur;quotient;coefficient;statut
+M;Maths;0;0;1;SYNC
+N;Maths;15;20;2;SYNC
+N;Maths;8;10;0.5;ADD
+N;Maths;12;20;1;DEL
+```
+
+- `type` : `M` (matière) ou `N` (note)
+- `statut` :
+  - `SYNC` : présent dans la BDD et dans le CSV
+  - `ADD` : ajouté hors-ligne, pas encore envoyé à la BDD
+  - `DEL` : supprimé hors-ligne, pas encore supprimé de la BDD
+- Les lignes de matière (`M`) n'utilisent pas les colonnes valeur, quotient et coefficient (mises à `0;0;1`).
+- L'ancien format à 5 colonnes (sans coefficient) est relu sans problème, avec un coefficient de 1.
+- Le fichier est écrit de façon atomique (fichier temporaire puis remplacement).
+
+### Organisation du code (classes imbriquées dans `Note`)
+
+| Classe | Rôle |
+|---|---|
+| `Theme` | Couleurs et polices du thème sombre |
+| `Database` | Connexion JDBC, test de disponibilité (`ping`), création des tables, synchronisation |
+| `MatiereDAO` | Requêtes sur la table `matieres` |
+| `NoteDAO` | Requêtes sur la table `notes` (insertion, suppression) |
+| `CsvMirror` | Lecture/écriture du CSV et réconciliation avec la BDD |
+
+Le délai de connexion est limité à 3 secondes pour que l'application ne se fige pas quand le Raspberry Pi ne répond pas.
+
+---
+
+## Architecture de la base de données
+
+PostgreSQL, deux tables créées automatiquement au lancement si elles n'existent pas :
+
+```mermaid
+erDiagram
+    matieres ||--o{ notes : "possède"
+    matieres {
+        SERIAL id PK
+        VARCHAR100 nom "UNIQUE, NOT NULL"
+        NUMERIC42 coefficient "NOT NULL, défaut 1"
+    }
+    notes {
+        SERIAL id PK
+        INTEGER matiere_id FK "NOT NULL"
+        INTEGER valeur "NOT NULL"
+        INTEGER quotient "NOT NULL"
+        NUMERIC42 coefficient "NOT NULL, défaut 1"
+        TIMESTAMP date_creation "défaut NOW()"
+    }
+```
+
+```sql
+CREATE TABLE IF NOT EXISTS matieres (
+    id SERIAL PRIMARY KEY,
+    nom VARCHAR(100) NOT NULL UNIQUE,
+    coefficient NUMERIC(4,2) NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS notes (
+    id SERIAL PRIMARY KEY,
+    matiere_id INTEGER NOT NULL REFERENCES matieres(id) ON DELETE CASCADE,
+    valeur INTEGER NOT NULL,
+    quotient INTEGER NOT NULL,
+    coefficient NUMERIC(4,2) NOT NULL DEFAULT 1,
+    date_creation TIMESTAMP DEFAULT NOW()
+);
+
+-- Base créée avant l'ajout des coefficients : la colonne est ajoutée automatiquement
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS coefficient NUMERIC(4,2) NOT NULL DEFAULT 1;
+```
+
+- Supprimer une matière supprime aussi ses notes (`ON DELETE CASCADE`).
+- Les anciennes notes créées avant les coefficients valent automatiquement 1.
+- Supprimer une note retire la plus récente qui correspond exactement à (matière, valeur, quotient, coefficient).
+- La colonne `matieres.coefficient` existe mais n'est pas utilisée dans le calcul actuel : la moyenne d'une matière ne dépend que des coefficients des notes.
+
+---
+
+## `Calendar.java` : agenda hebdomadaire
+
+### Fonctionnement
+
+1. Au lancement, l'application télécharge le fichier iCal (`ICARL_URL`) avec `HttpClient`.
+2. `biweekly` le lit, et chaque événement est converti en `Evenement` (titre, début, fin, salle). La classe `Evenement` est dans son propre fichier.
+3. Une couleur pastel est attribuée à chaque titre de cours (même titre = même couleur, sur tout l'emploi du temps).
+4. La vue `VueSemaine` dessine la grille à la main (`paintComponent`).
+
+Si le lien est injoignable, une fenêtre d'erreur s'affiche et l'agenda s'ouvre vide.
+
+### La vue
+
+- Jours en colonnes, heures en lignes ; de 8h à 19h par défaut, élargi automatiquement si un cours commence plus tôt ou finit plus tard
+- Du lundi au vendredi ; samedi et dimanche apparaissent seulement s'il y a cours
+- Chaque bloc affiche le titre, la salle et l'horaire ; une infobulle donne le détail complet au survol
+- Les cours qui se chevauchent sont placés côte à côte (par exemple les groupes de TD)
+- La colonne du jour est mise en évidence et un trait rose indique l'heure actuelle
+- Les cours déjà terminés sont grisés (même teinte, moins saturée) ; cela se met à jour au prochain rafraîchissement de la fenêtre
+- Navigation : `<` / `>` pour changer de semaine, `Aujourd'hui` pour revenir à la semaine courante
+
+---
+
+## Limites connues
+
+- Les événements récurrents iCal (`RRULE`) ne sont pas développés : seuls les événements listés tels quels apparaissent.
+- L'agenda n'est chargé qu'au lancement (pas de rafraîchissement automatique du lien iCal).
+- La classe `Theme` est dupliquée dans `Note.java` et `Calendar.java` ; elle pourrait être mise dans un fichier commun.
+- Pas de suppression de matière dans l'interface, et pas de modification d'une note : pour changer une note ou son coefficient, il faut la supprimer puis la ré-ajouter.
+- La logique CSV et le calcul des moyennes ont été testés hors-ligne ; la synchronisation avec la vraie base PostgreSQL est à valider en conditions réelles.
+
+## À ne pas commiter
+
+Ajouter au `.gitignore` :
+
+```
+.env
+notes_backup.csv
+notes_backup.csv.tmp
+```
