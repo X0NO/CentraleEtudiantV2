@@ -1,3 +1,6 @@
 .env
 target/
 *.class
+notes_backup.csv
+devoirs_backup.csv
+*.csv.tmp

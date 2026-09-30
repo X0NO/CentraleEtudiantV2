@@ -1,0 +1,63 @@
+# Construit l'appli pour Linux et Windows sur les serveurs de GitHub.
+#
+# - Lancement manuel : onglet "Actions" > "Paquets" > "Run workflow".
+#   Les fichiers sont téléchargeables en bas de la page du run ("Artifacts").
+# - Publication d'une version : git tag v1.0.0 && git push origin v1.0.0
+#   Les fichiers sont alors joints à une "Release" GitHub (page Releases du dépôt) : le lien à envoyer aux amis.
+name: Paquets
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  paquets:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '1.0.0' }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Construire (Linux)
+        if: runner.os == 'Linux'
+        run: bash packaging/construire-linux.sh
+
+      - name: Construire (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./packaging/construire-windows.ps1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: CentraleEtudiant-${{ runner.os }}
+          path: |
+            target/dist/*.tar.gz
+            target/dist/*.deb
+            target/dist/*.zip
+            target/dist/*.msi
+          if-no-files-found: error
+
+      - name: Joindre à la Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            target/dist/*.tar.gz
+            target/dist/*.deb
+            target/dist/*.zip
+            target/dist/*.msi

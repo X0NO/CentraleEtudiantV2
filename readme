@@ -19,7 +19,49 @@ Concrètement : le code peut contenir des bugs ou des choix que je n'ai pas relu
 
 ---
 
-## Prérequis
+## Installer l'appli (pour les amis)
+
+Rien à installer à part l'appli elle-même : Java est inclus.
+
+1. Télécharger le fichier correspondant à son système sur la page **Releases** du dépôt GitHub :
+   - **Windows** : `CentraleEtudiant-<version>.msi` (installateur, sans droits administrateur) ou `CentraleEtudiant-<version>-windows-x64.zip` (décompresser, puis lancer `CentraleEtudiant.exe`)
+   - **Linux (Debian / Ubuntu / Mint)** : `centrale-etudiant_<version>_amd64.deb` (`sudo apt install ./centrale-etudiant_*.deb`)
+   - **Linux (toutes distributions)** : `CentraleEtudiant-<version>-linux-x64.tar.gz` (décompresser, puis lancer `CentraleEtudiant/bin/CentraleEtudiant`)
+2. Au premier lancement, la fenêtre **Paramètres** demande :
+   - le **lien iCal** de l'emploi du temps (ADE : « Export agenda » → « Générer URL ») ;
+   - l'**adresse Gmail** et un **mot de passe d'application** Google (créé sur https://myaccount.google.com/apppasswords, nécessite la validation en deux étapes) ;
+   - une base PostgreSQL, **facultative** : sans base, notes et devoirs restent enregistrés sur l'ordinateur.
+
+   Chaque section a un bouton **Tester**. Les paramètres se modifient ensuite depuis le tableau de bord : menu **Raccourcis → Paramètres** (Ctrl+,).
+
+Réglages et données (CSV des notes et des devoirs) sont propres à chaque utilisateur :
+
+| Système | Dossier |
+|---|---|
+| Linux | `~/.config/centrale-etudiant/` |
+| Windows | `%APPDATA%\CentraleEtudiant\` |
+| macOS | `~/Library/Application Support/CentraleEtudiant/` |
+
+Le mot de passe d'application est stocké en clair dans `config.properties` (lisible uniquement par l'utilisateur sous Linux) : ne pas partager ce fichier.
+
+## Construire les paquets
+
+| Commande | Résultat |
+|---|---|
+| `mvn package` | `target/centrale-etudiant.jar`, un seul fichier avec toutes les dépendances (`java -jar target/centrale-etudiant.jar`, nécessite Java 17+) |
+| `packaging/construire-linux.sh 1.0.0` | `target/dist/` : dossier portable `.tar.gz` + `.deb` (si `dpkg-deb` et `fakeroot` sont installés) |
+| `.\packaging\construire-windows.ps1 -Version 1.0.0` (sous Windows) | `target\dist\` : dossier portable `.zip` + `.msi` (si WiX Toolset est installé) |
+
+Les scripts utilisent `jpackage` (fourni avec le JDK) et embarquent un Java allégé. `jpackage` ne sait construire que pour le système sur lequel il tourne : le paquet Windows se fait sous Windows.
+
+Sans machine Windows : le workflow GitHub Actions `.github/workflows/paquets.yml` construit Linux **et** Windows.
+
+- Lancement manuel : onglet **Actions → Paquets → Run workflow**, fichiers dans « Artifacts ».
+- Publier une version : `git tag v1.0.0 && git push origin v1.0.0` ; les fichiers sont joints à une **Release**, dont le lien peut être envoyé aux amis.
+
+Classe principale : `com.centrale.Main` (tableau de bord). `Note`, `Calendar`, `Devoirs` et `Mails` se lancent aussi seuls.
+
+## Prérequis (développement)
 
 - Java 17 ou plus récent
 - Projet Maven avec les dépendances :
@@ -41,7 +83,7 @@ DB_PASSWORD=<mot_de_passe>
 ICARL_URL=https://<lien-ical-de-l-emploi-du-temps>
 ```
 
-Lancer les programmes depuis la **racine du projet** : le `.env` et le fichier `notes_backup.csv` sont cherchés dans le dossier de travail.
+Le `.env` n'est plus qu'une solution de secours pour le développement : il est lu depuis le dossier de travail quand un réglage n'est pas renseigné dans les Paramètres. Au premier lancement, un ancien `notes_backup.csv` ou `devoirs_backup.csv` présent dans le dossier de travail est copié dans le dossier de l'utilisateur.
 
 Classes à lancer : `com.centrale.Note` et `com.centrale.Calendar`.
 
@@ -195,7 +237,6 @@ Si le lien est injoignable, une fenêtre d'erreur s'affiche et l'agenda s'ouvre 
 
 - Les événements récurrents iCal (`RRULE`) ne sont pas développés : seuls les événements listés tels quels apparaissent.
 - L'agenda n'est chargé qu'au lancement (pas de rafraîchissement automatique du lien iCal).
-- La classe `Theme` est dupliquée dans `Note.java` et `Calendar.java` ; elle pourrait être mise dans un fichier commun.
 - Pas de suppression de matière dans l'interface, et pas de modification d'une note : pour changer une note ou son coefficient, il faut la supprimer puis la ré-ajouter.
 - La logique CSV et le calcul des moyennes ont été testés hors-ligne ; la synchronisation avec la vraie base PostgreSQL est à valider en conditions réelles.
 
@@ -206,5 +247,8 @@ Ajouter au `.gitignore` :
 ```
 .env
 notes_backup.csv
-notes_backup.csv.tmp
+devoirs_backup.csv
+*.csv.tmp
 ```
+
+`notes_backup.csv` est encore suivi par git (il contient des notes personnelles) : `git rm --cached notes_backup.csv` pour l'enlever du dépôt sans supprimer le fichier.

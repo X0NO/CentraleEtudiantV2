@@ -1,15 +1,10 @@
 package com.centrale;
 
 import java.awt.BorderLayout;
-import java.awt.Color;
-import java.awt.Cursor;
-import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.math.BigDecimal;
@@ -17,7 +12,6 @@ import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -30,7 +24,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JFrame;
@@ -40,51 +33,25 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.JTextField;
-import javax.swing.SwingConstants;
-import javax.swing.UIManager;
+import javax.swing.SwingUtilities;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
-import javax.swing.table.JTableHeader;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
 import javax.swing.text.PlainDocument;
-import io.github.cdimascio.dotenv.Dotenv;
 
 public class Note {
 
     // =====================================================================
     // CONNEXION BASE DE DONNÉES
     // =====================================================================
-    public static Dotenv dotenv = Dotenv.load();
-
-    private static final String urlDB = dotenv.get("DB_URL");
-    private static final String USER = dotenv.get("DB_USERNAME");
-    private static final String PASSWORD = dotenv.get("DB_PASSWORD");
+    // Base facultative : adresse et identifiants dans les Paramètres (voir Config).
+    // Sans base configurée, tout reste dans le fichier CSV local.
 
     private static final String[] MATIERES_PAR_DEFAUT = {
             "Intro_Syst", "Init_Dev", "Maths", "Intro_BD", "Anglais", "Commu", "PPP", "Dev_Web"
     };
-
-    // =====================================================================
-    // THEME
-    // =====================================================================
-    static final class Theme {
-        static final Color BACKGROUND      = new Color(0x1E1E2E);
-        static final Color SURFACE         = new Color(0x2A2A3C);
-        static final Color SURFACE_ALT     = new Color(0x252536);
-        static final Color ACCENT          = new Color(0x89B4FA);
-        static final Color ACCENT_HOVER    = new Color(0x74A0F0);
-        static final Color TEXT_PRIMARY    = new Color(0xE0E0E8);
-        static final Color TEXT_ON_ACCENT  = new Color(0x1E1E2E);
-        static final Color BORDER          = new Color(0x3A3A4E);
-
-        static final Font FONT_TITLE  = new Font("Segoe UI", Font.BOLD, 20);
-        static final Font FONT_LABEL  = new Font("Segoe UI", Font.PLAIN, 14);
-        static final Font FONT_BUTTON = new Font("Segoe UI", Font.BOLD, 13);
-        static final Font FONT_TABLE  = new Font("Segoe UI", Font.PLAIN, 13);
-        static final Font FONT_HEADER = new Font("Segoe UI", Font.BOLD, 13);
-    }
 
     static int[] columnNote = {2};
     static JTable tableNote;
@@ -110,7 +77,7 @@ public class Note {
     //    appliqués à la BDD, puis le CSV est réaligné sur la BDD.
     // =====================================================================
     static final class CsvMirror {
-        static final String FILE = "notes_backup.csv";
+        static final Path FILE = Config.fichier("notes_backup.csv");
         static final String HEADER = "type;matiere;valeur;quotient;coefficient;statut";
         static final String SYNC = "SYNC";
         static final String ADD = "ADD";
@@ -152,7 +119,7 @@ public class Note {
         /** Lit le CSV. Si la lecture échoue, on lève une exception plutôt que d'écraser le fichier ensuite. */
         static synchronized List<Entry> lire() {
             List<Entry> res = new ArrayList<>();
-            Path p = Paths.get(FILE);
+            Path p = FILE;
             if (!Files.exists(p)) return res;
             try {
                 for (String line : Files.readAllLines(p, StandardCharsets.UTF_8)) {
@@ -181,9 +148,9 @@ public class Note {
             lignes.add(HEADER);
             for (Entry e : entries) lignes.add(e.toLine());
             try {
-                Path tmp = Paths.get(FILE + ".tmp");
+                Path tmp = FILE.resolveSibling(FILE.getFileName() + ".tmp");
                 Files.write(tmp, lignes, StandardCharsets.UTF_8);
-                Files.move(tmp, Paths.get(FILE), StandardCopyOption.REPLACE_EXISTING);
+                Files.move(tmp, FILE, StandardCopyOption.REPLACE_EXISTING);
             } catch (IOException e) {
                 System.err.println("Erreur d'écriture de " + FILE + " : " + e.getMessage());
             }
@@ -337,7 +304,8 @@ public class Note {
         static boolean schemaPret = false;
 
         static Connection getConnection() throws SQLException {
-            return DriverManager.getConnection(urlDB, USER, PASSWORD);
+            if (!Config.bddConfiguree()) throw new SQLException("Aucune base de données configurée (mode local)");
+            return DriverManager.getConnection(Config.get(Config.DB_URL), Config.get(Config.DB_USER), Config.get(Config.DB_PASSWORD));
         }
 
         /** true si la BDD répond. */
@@ -365,7 +333,7 @@ public class Note {
                 System.out.println("Connexion à la base de données réussie !");
                 return true;
             } catch (SQLException e) {
-                System.err.println("Impossible de se connecter au Raspberry Pi : " + e.getMessage());
+                System.err.println("Base de données injoignable, mode local : " + e.getMessage());
                 return false;
             }
         }
@@ -521,25 +489,7 @@ public class Note {
     // UTILITAIRES & THEME
     // =====================================================================
     static JButton themedButton(String text) {
-        JButton button = new JButton(text);
-        button.setFont(Theme.FONT_BUTTON);
-        button.setBackground(Theme.ACCENT);
-        button.setForeground(Theme.TEXT_ON_ACCENT);
-        button.setFocusPainted(false);
-        button.setBorder(new EmptyBorder(8, 18, 8, 18));
-        button.setCursor(new Cursor(Cursor.HAND_CURSOR));
-
-        button.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mouseEntered(MouseEvent e) {
-                button.setBackground(Theme.ACCENT_HOVER);
-            }
-            @Override
-            public void mouseExited(MouseEvent e) {
-                button.setBackground(Theme.ACCENT);
-            }
-        });
-        return button;
+        return Theme.bouton(text);
     }
 
     static class NoteFilter extends DocumentFilter {
@@ -689,7 +639,7 @@ public class Note {
             return;
         }
 
-        if (!dbOk) {
+        if (!dbOk && Config.bddConfiguree()) {
             JOptionPane.showMessageDialog(parent, "Connexion BDD indisponible. La note a été supprimée du fichier local.\nElle sera supprimée de la BDD dès la reconnexion.", "Mode Hors-Ligne", JOptionPane.INFORMATION_MESSAGE);
         }
         rechargerApplication();
@@ -748,14 +698,14 @@ public class Note {
                     return;
                 }
                 CsvMirror.ajouterMatiere(saisie, false);
-                JOptionPane.showMessageDialog(addMatiereFrame, "Connexion BDD indisponible. La matière a été enregistrée dans le fichier local.\nElle sera envoyée à la BDD dès la reconnexion.", "Mode Hors-Ligne", JOptionPane.INFORMATION_MESSAGE);
+                if (Config.bddConfiguree()) JOptionPane.showMessageDialog(addMatiereFrame, "Connexion BDD indisponible. La matière a été enregistrée dans le fichier local.\nElle sera envoyée à la BDD dès la reconnexion.", "Mode Hors-Ligne", JOptionPane.INFORMATION_MESSAGE);
             }
 
             rechargerApplication();
             addMatiereFrame.dispose();
         });
 
-        JButton annulButton = themedButton("Annuler");
+        JButton annulButton = Theme.boutonSecondaire("Annuler");
         annulButton.addActionListener(e -> addMatiereFrame.dispose());
 
         JPanel btnValidAnnulPanel = new JPanel();
@@ -860,7 +810,7 @@ public class Note {
             // (statut SYNC si la BDD a accepté la note, ADD si elle reste à envoyer)
             CsvMirror.ajouterNote(matiereChoisie, note, quotient, coefficient, insertionOk);
 
-            if (!insertionOk) {
+            if (!insertionOk && Config.bddConfiguree()) {
                 JOptionPane.showMessageDialog(addNoteFrame, "Connexion BDD indisponible. La note a été sauvegardée dans le fichier local (CSV).\nElle sera envoyée à la BDD dès la reconnexion.", "Mode Hors-Ligne", JOptionPane.INFORMATION_MESSAGE);
             } else {
                 JOptionPane.showMessageDialog(addNoteFrame, "Note enregistrée avec succès !");
@@ -870,7 +820,7 @@ public class Note {
             addNoteFrame.dispose();
         });
 
-        JButton annulButton = themedButton("Annuler");
+        JButton annulButton = Theme.boutonSecondaire("Annuler");
         annulButton.addActionListener(e -> addNoteFrame.dispose());
 
         JPanel btnValidAnnulPanel = new JPanel();
@@ -925,18 +875,11 @@ public class Note {
     }
 
     static void styleTextField(JTextField field) {
-        field.setFont(Theme.FONT_LABEL);
-        field.setBackground(Theme.SURFACE);
-        field.setForeground(Theme.TEXT_PRIMARY);
-        field.setCaretColor(Theme.TEXT_PRIMARY);
-        field.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(Theme.BORDER),
-                new EmptyBorder(4, 6, 4, 6)));
+        Theme.styleChamp(field);
     }
 
     static void styleLabel(JLabel label) {
-        label.setFont(Theme.FONT_LABEL);
-        label.setForeground(Theme.TEXT_PRIMARY);
+        Theme.styleLabel(label);
     }
 
     static Object[][] donneesInitiales;
@@ -977,6 +920,11 @@ public class Note {
         columnNote[0] = maxNotes + 1;
     }
 
+    // Fenêtre ouverte (utilisée par le tableau de bord Main.java pour ne pas l'ouvrir deux fois).
+    // Lancé seul, fermer la fenêtre quitte l'appli ; ouvert depuis Main, seule la fenêtre se ferme.
+    static volatile JFrame fenetre;
+    static int fermeture = JFrame.EXIT_ON_CLOSE;
+
     public static void main(String[] args) {
 
         // Évite de figer l'appli plusieurs secondes à chaque test si le Raspberry Pi est injoignable
@@ -986,115 +934,94 @@ public class Note {
         if (isConnected) {
             Database.creerTables();
             Database.seedMatieresSiVide();
+        } else if (!Files.exists(CsvMirror.FILE)) {
+            // Tout premier lancement sans base : on part des matières par défaut
+            for (String nom : MATIERES_PAR_DEFAUT) CsvMirror.ajouterMatiere(nom, false);
         }
 
         // Compare BDD/CSV (si en ligne) puis charge l'affichage
         chargerDonneesInitiales();
 
-        UIManager.put("Panel.background", Theme.BACKGROUND);
-        UIManager.put("OptionPane.background", Theme.BACKGROUND);
-        UIManager.put("OptionPane.messageForeground", Theme.TEXT_PRIMARY);
-        UIManager.put("Button.background", Theme.ACCENT);
-        UIManager.put("Button.foreground", Theme.TEXT_ON_ACCENT);
+        Theme.installer();
 
-        JFrame frame = new JFrame("Centrale Étudiant");
-        frame.setSize(1000, 800);
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.getContentPane().setBackground(Theme.BACKGROUND);
+        // La fenêtre est construite sur le fil d'affichage de Swing (obligatoire quand Main.java l'ouvre)
+        SwingUtilities.invokeLater(() -> {
+            JFrame frame = new JFrame("Centrale Étudiant · Notes");
+            frame.setSize(1000, 800);
+            frame.setDefaultCloseOperation(fermeture);
+            fenetre = frame;
+            frame.getContentPane().setBackground(Theme.BACKGROUND);
 
-        JLabel titleLabel = new JLabel("Centrale Étudiant", SwingConstants.CENTER);
-        titleLabel.setFont(Theme.FONT_TITLE);
-        titleLabel.setForeground(Theme.TEXT_PRIMARY);
-        titleLabel.setBorder(new EmptyBorder(16, 0, 16, 0));
+            JPanel entete = Theme.entete("Notes et moyennes", Theme.info("Clique sur une note pour la sélectionner"));
 
-        DefaultTableModel tableUnClickable = new DefaultTableModel(donneesInitiales, colonnesInitiales) {
-            @Override
-            public boolean isCellEditable(int row, int column) {
-                return false;
+            DefaultTableModel tableUnClickable = new DefaultTableModel(donneesInitiales, colonnesInitiales) {
+                @Override
+                public boolean isCellEditable(int row, int column) {
+                    return false;
+                }
+            };
+
+            tableNote = new JTable(tableUnClickable);
+            styleTable(tableNote);
+            tableNote.setCellSelectionEnabled(true); // on clique sur la case d'une note
+
+            JScrollPane scroll = new JScrollPane(tableNote);
+
+            DefaultTableModel modelMoyenne = new DefaultTableModel(new String[]{"Matière", "Moyenne"}, 0) {
+                @Override
+                public boolean isCellEditable(int row, int column) {
+                    return false;
+                }
+            };
+
+            ListMatiere();
+            List<Double> moyennesInitiales = calculMoyenneGenerale();
+            for (int i = 0; i < nomsMatieres.length; i++) {
+                Double m = (i < moyennesInitiales.size()) ? moyennesInitiales.get(i) : null;
+                String affichage = (m == null) ? "" : String.format("%.2f", m);
+                modelMoyenne.addRow(new Object[]{ nomsMatieres[i], affichage });
             }
-        };
 
-        tableNote = new JTable(tableUnClickable);
-        styleTable(tableNote);
-        tableNote.setCellSelectionEnabled(true); // on clique sur la case d'une note
+            tableMoyenne = new JTable(modelMoyenne);
+            styleTable(tableMoyenne);
 
-        JScrollPane scroll = new JScrollPane(tableNote);
-        scroll.setOpaque(true);
-        scroll.setBackground(Theme.BACKGROUND);
-        scroll.getViewport().setBackground(Theme.SURFACE);
-        scroll.setBorder(new EmptyBorder(0, 20, 0, 20));
+            JScrollPane scrollMoyenne = new JScrollPane(tableMoyenne);
 
-        DefaultTableModel modelMoyenne = new DefaultTableModel(new String[]{"Matière", "Moyenne"}, 0) {
-            @Override
-            public boolean isCellEditable(int row, int column) {
-                return false;
-            }
-        };
+            JPanel tablesPanel = new JPanel(new GridLayout(2, 1, 0, 16));
+            tablesPanel.setBackground(Theme.BACKGROUND);
+            tablesPanel.setBorder(new EmptyBorder(0, 24, 0, 24));
+            tablesPanel.add(Theme.encadrer(scroll));
+            tablesPanel.add(Theme.encadrer(scrollMoyenne));
 
-        ListMatiere();
-        List<Double> moyennesInitiales = calculMoyenneGenerale();
-        for (int i = 0; i < nomsMatieres.length; i++) {
-            Double m = (i < moyennesInitiales.size()) ? moyennesInitiales.get(i) : null;
-            String affichage = (m == null) ? "" : String.format("%.2f", m);
-            modelMoyenne.addRow(new Object[]{ nomsMatieres[i], affichage });
-        }
+            JButton btnNote = themedButton("Ajouter Une Note");
+            btnNote.addActionListener(e -> AddNote());
 
-        tableMoyenne = new JTable(modelMoyenne);
-        styleTable(tableMoyenne);
+            JButton btnDeleteNote = Theme.boutonSecondaire("Supprimer la note sélectionnée");
+            btnDeleteNote.addActionListener(e -> DeleteNote());
 
-        JScrollPane scrollMoyenne = new JScrollPane(tableMoyenne);
-        scrollMoyenne.setOpaque(true);
-        scrollMoyenne.setBackground(Theme.BACKGROUND);
-        scrollMoyenne.getViewport().setBackground(Theme.SURFACE);
-        scrollMoyenne.setBorder(new EmptyBorder(0, 20, 0, 20));
+            JButton btnMatiere = Theme.boutonSecondaire("Ajouter Une Matière");
+            btnMatiere.addActionListener(e -> AddMatiere());
 
-        JPanel tablesPanel = new JPanel(new GridLayout(2, 1, 0, 12));
-        tablesPanel.setBackground(Theme.BACKGROUND);
-        tablesPanel.add(scroll);
-        tablesPanel.add(scrollMoyenne);
+            JPanel btnSurround = new JPanel();
+            btnSurround.setBackground(Theme.BACKGROUND);
+            btnSurround.setBorder(new EmptyBorder(16, 0, 16, 0));
+            btnSurround.add(btnNote);
+            btnSurround.add(btnDeleteNote);
+            btnSurround.add(btnMatiere);
 
-        JButton btnNote = themedButton("Ajouter Une Note");
-        btnNote.addActionListener(e -> AddNote());
+            JPanel panel = new JPanel(new BorderLayout());
+            panel.setBackground(Theme.BACKGROUND);
+            panel.add(entete, BorderLayout.NORTH);
+            panel.add(tablesPanel, BorderLayout.CENTER);
+            panel.add(btnSurround, BorderLayout.SOUTH);
 
-        JButton btnDeleteNote = themedButton("Supprimer la note sélectionnée");
-        btnDeleteNote.addActionListener(e -> DeleteNote());
-
-        JButton btnMatiere = themedButton("Ajouter Une Matière");
-        btnMatiere.addActionListener(e -> AddMatiere());
-
-        JPanel btnSurround = new JPanel();
-        btnSurround.setBackground(Theme.BACKGROUND);
-        btnSurround.setBorder(new EmptyBorder(16, 0, 16, 0));
-        btnSurround.add(btnNote);
-        btnSurround.add(btnDeleteNote);
-        btnSurround.add(btnMatiere);
-
-        JPanel panel = new JPanel(new BorderLayout());
-        panel.setBackground(Theme.BACKGROUND);
-        panel.add(titleLabel, BorderLayout.NORTH);
-        panel.add(tablesPanel, BorderLayout.CENTER);
-        panel.add(btnSurround, BorderLayout.SOUTH);
-
-        frame.getContentPane().add(panel);
-        frame.setLocationRelativeTo(null);
-        frame.setVisible(true);
+            frame.getContentPane().add(panel);
+            frame.setLocationRelativeTo(null);
+            frame.setVisible(true);
+        });
     }
 
     static void styleTable(JTable table) {
-        table.setFont(Theme.FONT_TABLE);
-        table.setForeground(Theme.TEXT_PRIMARY);
-        table.setBackground(Theme.SURFACE);
-        table.setGridColor(Theme.BORDER);
-        table.setRowHeight(30);
-        table.setSelectionBackground(Theme.ACCENT);
-        table.setSelectionForeground(Theme.TEXT_ON_ACCENT);
-        table.setShowGrid(true);
-        table.setFillsViewportHeight(true);
-
-        JTableHeader header = table.getTableHeader();
-        header.setFont(Theme.FONT_HEADER);
-        header.setBackground(Theme.SURFACE_ALT);
-        header.setForeground(Theme.TEXT_PRIMARY);
-        header.setBorder(BorderFactory.createLineBorder(Theme.BORDER));
+        Theme.styleTable(table);
     }
 }

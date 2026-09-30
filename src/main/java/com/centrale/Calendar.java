@@ -3,7 +3,6 @@ package com.centrale;
 import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
-import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
@@ -11,7 +10,6 @@ import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
-import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Line2D;
@@ -23,6 +21,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -36,7 +35,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -44,73 +42,52 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
 import javax.swing.border.EmptyBorder;
 
-import io.github.cdimascio.dotenv.Dotenv;
 
 import biweekly.Biweekly;
 import biweekly.ICalendar;
 import biweekly.component.VEvent;
 
 public class Calendar {
-    private static final Dotenv dotenv = Dotenv.load();
-    private static final String urlICARL = dotenv.get("ICARL_URL");
-
-    // =====================================================================
-    // THEME (même style que Note.java)
-    // =====================================================================
-    static final class Theme {
-        static final Color BACKGROUND      = new Color(0x1E1E2E);
-        static final Color SURFACE         = new Color(0x2A2A3C);
-        static final Color SURFACE_ALT     = new Color(0x252536);
-        static final Color ACCENT          = new Color(0x89B4FA);
-        static final Color ACCENT_HOVER    = new Color(0x74A0F0);
-        static final Color TEXT_PRIMARY    = new Color(0xE0E0E8);
-        static final Color TEXT_ON_ACCENT  = new Color(0x1E1E2E);
-        static final Color BORDER          = new Color(0x3A3A4E);
-
-        static final Font FONT_TITLE  = new Font("Segoe UI", Font.BOLD, 20);
-        static final Font FONT_LABEL  = new Font("Segoe UI", Font.PLAIN, 14);
-        static final Font FONT_BUTTON = new Font("Segoe UI", Font.BOLD, 13);
-        static final Font FONT_TABLE  = new Font("Segoe UI", Font.PLAIN, 13);
-    }
 
     static JButton themedButton(String text) {
-        JButton button = new JButton(text);
-        button.setFont(Theme.FONT_BUTTON);
-        button.setBackground(Theme.ACCENT);
-        button.setForeground(Theme.TEXT_ON_ACCENT);
-        button.setFocusPainted(false);
-        button.setBorder(new EmptyBorder(8, 18, 8, 18));
-        button.setCursor(new Cursor(Cursor.HAND_CURSOR));
-
-        button.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mouseEntered(MouseEvent e) {
-                button.setBackground(Theme.ACCENT_HOVER);
-            }
-            @Override
-            public void mouseExited(MouseEvent e) {
-                button.setBackground(Theme.ACCENT);
-            }
-        });
-        return button;
+        return Theme.bouton(text);
     }
 
     static LocalDate jourActuelle() {
         return LocalDate.now();
     }
 
+    /** Emploi du temps depuis le lien iCal des paramètres (voir Config). */
     static List<Evenement> requestHttp() {
-        HttpClient client = HttpClient.newHttpClient();
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(urlICARL))
-                .GET()
+        return requestHttp(Config.get(Config.ICAL));
+    }
+
+    static List<Evenement> requestHttp(String lien) {
+        if (lien == null || lien.isBlank()) {
+            throw new IllegalStateException("Aucun lien iCal : renseigne-le dans les Paramètres.");
+        }
+        HttpRequest request;
+        try {
+            request = HttpRequest.newBuilder()
+                    .uri(URI.create(Config.normaliserIcal(lien)))
+                    .timeout(Duration.ofSeconds(20))
+                    .GET()
+                    .build();
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("Lien iCal invalide : " + lien, e);
+        }
+        HttpClient client = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .connectTimeout(Duration.ofSeconds(10))
                 .build();
 
         try {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                throw new IllegalStateException("Le serveur a répondu " + response.statusCode() + " (lien iCal expiré ?)");
+            }
             List<VEvent> vevents = parseIcal(response.body());
             return convertirEvents(vevents);
         } catch (InterruptedException e) {
@@ -123,6 +100,7 @@ public class Calendar {
 
     static List<VEvent> parseIcal(String icalContent) {
         ICalendar ical = Biweekly.parse(icalContent).first();
+        if (ical == null) throw new IllegalStateException("Ce lien ne renvoie pas un calendrier iCal (.ics)");
         return ical.getEvents();
     }
 
@@ -167,12 +145,15 @@ public class Calendar {
         private static final int HAUT_ENTETE = 46;
 
         private static final Color GRILLE = Theme.BORDER;
-        private static final Color GRILLE_LEGERE = new Color(0x323246);
+        private static final Color GRILLE_LEGERE = Theme.GRILLE_LEGERE;
         private static final Color ENTETE = Theme.SURFACE_ALT;
-        private static final Color FOND_AUJOURDHUI = new Color(0x2F3552);
+        private static final Color FOND_AUJOURDHUI = Theme.FOND_AUJOURDHUI;
         private static final Color ACCENT = Theme.ACCENT;
-        private static final Color TEXTE_DISCRET = new Color(0x8A8AA6);
-        private static final Color TRAIT_MAINTENANT = new Color(0xF38BA8);
+        private static final Color TEXTE_DISCRET = Theme.TEXT_DISCRET;
+        private static final Color TRAIT_MAINTENANT = Theme.RETARD;
+        /** Texte des cours : toujours foncé, les blocs restent pastel dans les deux modes. */
+        private static final Color TEXTE_BLOC = new Color(0x1E1E2E);
+        private static final Color TEXTE_BLOC_DISCRET = new Color(0x3A3A4E);
         private static final BasicStroke TRAIT = new BasicStroke(1f);
         private static final BasicStroke POINTILLES = new BasicStroke(1f, BasicStroke.CAP_BUTT,
                 BasicStroke.JOIN_MITER, 10f, new float[]{2f, 4f}, 0f);
@@ -404,12 +385,14 @@ public class Calendar {
         private void dessinerBloc(Graphics2D g0, Evenement e, Rectangle2D.Double z, Font police, Font gras) {
             Color fond = couleurs.getOrDefault(e.getTitre(), new Color(0xE0E0E0));
 
-            // Cours écoulé : même teinte, mais moins saturée et plus sombre (grisée)
+            // Cours écoulé : même teinte, mais grisée (plus sombre en mode sombre, plus pâle en mode clair)
             if (e.getFin().isBefore(LocalDateTime.now())) {
                 float[] hsb = Color.RGBtoHSB(fond.getRed(), fond.getGreen(), fond.getBlue(), null);
-                fond = Color.getHSBColor(hsb[0], hsb[1] * 0.5f, hsb[2] * 0.72f);
+                fond = Theme.estSombre()
+                        ? Color.getHSBColor(hsb[0], hsb[1] * 0.5f, hsb[2] * 0.72f)
+                        : Color.getHSBColor(hsb[0], hsb[1] * 0.35f, 0.93f);
             }
-            RoundRectangle2D forme = new RoundRectangle2D.Double(z.x, z.y, z.width, z.height, 8, 8);
+            RoundRectangle2D forme = new RoundRectangle2D.Double(z.x, z.y, z.width, z.height, 10, 10);
             g0.setColor(fond);
             g0.fill(forme);
             g0.setStroke(TRAIT);
@@ -418,7 +401,7 @@ public class Calendar {
 
             Graphics2D g = (Graphics2D) g0.create();
             g.clip(forme);
-            g.setColor(Theme.TEXT_ON_ACCENT);
+            g.setColor(TEXTE_BLOC);
 
             float x = (float) z.x + 5;
             float bas = (float) (z.y + z.height);
@@ -444,7 +427,7 @@ public class Calendar {
                 y += fm.getHeight();
             }
             if (y <= bas) {
-                g.setColor(new Color(0x3A3A4E));
+                g.setColor(TEXTE_BLOC_DISCRET);
                 g.drawString(e.getDebut().format(HEURE) + " - " + e.getFin().format(HEURE), x, y);
             }
             g.dispose();
@@ -493,16 +476,15 @@ public class Calendar {
         }
     }
 
+    // Fenêtre ouverte (utilisée par le tableau de bord Main.java pour ne pas l'ouvrir deux fois).
+    // Lancé seul, fermer la fenêtre quitte l'appli ; ouvert depuis Main, seule la fenêtre se ferme.
+    static volatile JFrame fenetre;
+    static int fermeture = JFrame.EXIT_ON_CLOSE;
+
     public static void main(String[] args) {
 
-        UIManager.put("Panel.background", Theme.BACKGROUND);
-        UIManager.put("OptionPane.background", Theme.BACKGROUND);
-        UIManager.put("OptionPane.messageForeground", Theme.TEXT_PRIMARY);
-        UIManager.put("Button.background", Theme.ACCENT);
-        UIManager.put("Button.foreground", Theme.TEXT_ON_ACCENT);
-        UIManager.put("ToolTip.background", Theme.SURFACE_ALT);
-        UIManager.put("ToolTip.foreground", Theme.TEXT_PRIMARY);
-        UIManager.put("ToolTip.border", BorderFactory.createLineBorder(Theme.BORDER));
+        Theme.installer();
+        Config.demanderSiPremierLancement();
 
         List<Evenement> evenements;
         try {
@@ -517,27 +499,24 @@ public class Calendar {
 
         final List<Evenement> tousLesEvenements = evenements;
         SwingUtilities.invokeLater(() -> {
-            JFrame frame = new JFrame("Centrale Étudiant");
+            JFrame frame = new JFrame("Centrale Étudiant · Emploi du temps");
             frame.setSize(1100, 800);
-            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            frame.setDefaultCloseOperation(fermeture);
+            fenetre = frame;
             frame.getContentPane().setBackground(Theme.BACKGROUND);
 
             VueSemaine vue = new VueSemaine(tousLesEvenements);
-            vue.setBorder(BorderFactory.createLineBorder(Theme.BORDER));
 
-            JLabel titleLabel = new JLabel("Centrale Étudiant", SwingConstants.CENTER);
-            titleLabel.setFont(Theme.FONT_TITLE);
-            titleLabel.setForeground(Theme.TEXT_PRIMARY);
-            titleLabel.setBorder(new EmptyBorder(16, 0, 8, 0));
+            JPanel entete = Theme.entete("Emploi du temps", null);
 
             JLabel semaine = new JLabel(vue.libelleSemaine(), SwingConstants.CENTER);
             semaine.setFont(Theme.FONT_LABEL.deriveFont(Font.BOLD, 15f));
             semaine.setForeground(Theme.TEXT_PRIMARY);
             Runnable maj = () -> semaine.setText(vue.libelleSemaine());
 
-            JButton precedent = themedButton("<");
+            JButton precedent = Theme.boutonSecondaire("‹");
             JButton aujourdhui = themedButton("Aujourd'hui");
-            JButton suivant = themedButton(">");
+            JButton suivant = Theme.boutonSecondaire("›");
             precedent.addActionListener(e -> { vue.semainePrecedente(); maj.run(); });
             suivant.addActionListener(e -> { vue.semaineSuivante(); maj.run(); });
             aujourdhui.addActionListener(e -> { vue.allerA(jourActuelle()); maj.run(); });
@@ -555,20 +534,20 @@ public class Calendar {
 
             JPanel barre = new JPanel(new BorderLayout());
             barre.setBackground(Theme.BACKGROUND);
-            barre.setBorder(new EmptyBorder(0, 20, 12, 20));
+            barre.setBorder(new EmptyBorder(0, 24, 12, 24));
             barre.add(boutons, BorderLayout.WEST);
             barre.add(semaine, BorderLayout.CENTER);
             barre.add(equilibre, BorderLayout.EAST);
 
             JPanel haut = new JPanel(new BorderLayout());
             haut.setBackground(Theme.BACKGROUND);
-            haut.add(titleLabel, BorderLayout.NORTH);
+            haut.add(entete, BorderLayout.NORTH);
             haut.add(barre, BorderLayout.CENTER);
 
             JPanel centre = new JPanel(new BorderLayout());
             centre.setBackground(Theme.BACKGROUND);
-            centre.setBorder(new EmptyBorder(0, 20, 20, 20));
-            centre.add(vue, BorderLayout.CENTER);
+            centre.setBorder(new EmptyBorder(0, 24, 24, 24));
+            centre.add(Theme.encadrer(vue), BorderLayout.CENTER);
 
             frame.add(haut, BorderLayout.NORTH);
             frame.add(centre, BorderLayout.CENTER);
